@@ -15,6 +15,9 @@ instead of trying to replace them.
 
 - Trips are collaborative by default: everyone going on the trip can view and
   edit the plan.
+- **Not everyone flies together.** On group trips, each member can have their
+  own arrival and departure — join two days late, duck out early — and the
+  app knows whose trip runs when.
 - A trip is made of cities and dates, itinerary items (flights, stays,
   reservations, activities — with times, addresses, and confirmation numbers),
   and trip to-dos (book X, check in online, pack).
@@ -48,6 +51,13 @@ instead of trying to replace them.
 
 ### During the trip — live off your phone
 
+- **The trip starts itself.** When the start date arrives, the app leads with
+  the in-trip experience on its own — going by *your* dates on trips where
+  members arrive late or leave early. No mode to toggle.
+- **Planning never closes.** An active trip is still a fully editable one:
+  book a dinner mid-trip, push tomorrow's activity back a day, add a whole
+  new reservation from the hotel lobby. Planning and being on the trip are
+  views of the same plan, not phases.
 - **Today view** — the city you're in at the top, then the day as a schedule:
   "check out at 11:00", "flight from HND to CTS at 14:30", "check in at
   16:00", dinner reservation at 19:00 — with what's next highlighted, and the
@@ -75,6 +85,9 @@ instead of trying to replace them.
   both web and phone, and moving between devices mid-plan is seamless — no
   "finish this on the computer". The in-trip experience is built for the
   phone in your pocket.
+- **Nothing is set in stone.** A trip is a living plan: anything can be
+  added, moved, or dropped at any moment, before or during the trip. "Active"
+  is just a date arriving — it never locks anything.
 - **The booking is the source.** You booked it somewhere else; effoff's job is
   to capture that artifact once, extract what matters, and keep the original
   close at hand.
@@ -88,6 +101,8 @@ instead of trying to replace them.
   booked elsewhere.
 - Android — explicitly later, not never.
 - Social or discovery features. This is for your trips, not a feed.
+- Expense tracking in the first versions — a settle-up area is on the
+  long-term roadmap (see below), not in v1.
 
 ## Stack
 
@@ -111,7 +126,10 @@ instead of trying to replace them.
    Calendar + Reminders sync, city map-list links.
 4. **In-trip polish** — offline cache, widgets and notifications, better
    share/invite flow.
-5. **Later** — Android, richer integrations.
+5. **Later** — Android; richer integrations; **settle up** — a bills area
+   for figuring out who owes who during and after the trip, likely by making
+   the `payback` engine extensible and building on it rather than rewriting
+   the money math.
 
 ## Open questions
 

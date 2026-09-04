@@ -86,12 +86,34 @@ bucket, no signed URLs in v1.
 ### User, TripMember, Invite
 
 - `users` — id, auth provider + subject (see Auth), email, display name.
-- `trip_members` — (trip_id, user_id). **Proposed: no roles in v1** — the
-  README says a trip belongs to everyone on it; every member can edit
-  everything. One carve-out: only the creator can delete the trip.
+- `trip_members` — (trip_id, user_id), plus **optional personal
+  `arrival_date` / `departure_date`** for members who join late or leave
+  early. Null means "the whole trip". These are the member's *presence
+  window*, used by lifecycle logic (below) — they never restrict what the
+  member can see or edit.
+- **Proposed: no roles in v1** — the README says a trip belongs to everyone
+  on it; every member can edit everything. One carve-out: only the creator
+  can delete the trip.
 - `invites` — token, trip_id, created_by, expiry. Share a link; opening it
   while signed in joins the trip. No per-email invites in v1 (people share
   trip links in the group chat anyway).
+
+## Trip lifecycle (**proposed**)
+
+There is **no trip status column and no phase state on the server**. "The
+trip started" is a pure function the clients evaluate: today's date falls
+inside the trip's derived date range, clipped to the viewing member's
+personal presence window when one is set. That's what makes the app lead
+with the in-trip experience on the right day *per member* — the friend
+joining two days late stays in planning mode while everyone else is already
+on the ground.
+
+Corollary, and a load-bearing product rule: **nothing locks when a trip goes
+active.** Planning and in-trip are views over the same rows; every mutation
+endpoint behaves identically before, during, and after the trip. Phase 1
+must not grow validation like "can't edit past items" or "trip is
+read-only after end date" — flexibility is the requirement, and statelessness
+here is what keeps it free.
 
 ## Auth (**proposed**)
 
@@ -157,6 +179,16 @@ v1 is **poll + last-write-wins per row**, not real-time:
 - Ops notes: `ANTHROPIC_API_KEY` as a Worker secret; extraction only ever
   runs on an explicit user action, so cost is bounded by usage.
 
+## Deliberately out of scope (but not blocked)
+
+**Settle up / who-owes-who** is on the long-term roadmap, not Phase 1 — no
+expense tables in this schema. Nothing here blocks it: expenses would arrive
+as new trip-scoped tables (expense, payer, splits) keyed to `trip_members`,
+and the likely path is extracting the `payback` repo's money math into a
+reusable engine rather than rewriting it. The one Phase 1 obligation is
+keeping `trip_members` a real table with stable ids — which it is — so
+future expenses have something durable to point at.
+
 ## Repo layout (**proposed**)
 
 ```
@@ -189,5 +221,9 @@ Monorepo, one deploy for backend + web. `wrangler d1 migrations` for schema.
   nullable and trip dates fall back to null.
 - **Invite links** — expiry/revocation semantics: fixed 30-day expiry, or
   revocable from trip settings?
+- **Presence windows vs. sync** — should Apple Calendar/Reminders sync clip
+  to the member's personal arrival/departure window (only sync the days
+  you're there), or always sync the whole trip? (Leaning: sync your window
+  by default, with a toggle.)
 - Carried from the README: the Google Maps list **import path** (share link
   vs share sheet vs Takeout) — still deferred to the place-layer work.
