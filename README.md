@@ -18,8 +18,29 @@ instead of trying to replace them.
 - A trip is made of cities and dates, itinerary items (flights, stays,
   reservations, activities — with times, addresses, and confirmation numbers),
   and trip to-dos (book X, check in online, pack).
+- **Booking capture.** A trip starts with bookings: upload or screenshot a
+  flight ticket or hotel confirmation and effoff extracts the details — times,
+  airports, addresses, check-in/checkout, confirmation numbers — into itinerary
+  items. The original image stays attached, one tap away when you need to show
+  it at a desk.
+- **Flights know their timezones.** Flight times are shown in the local time of
+  the departure and arrival airports, because that's the only way flight times
+  make sense.
+- **Hotels are first-class.** Check-in and checkout become itinerary items with
+  their own times, and every hotel on the trip is pinned to one per-*trip*
+  hotel list — the one list that spans cities — so routing back to the hotel
+  (or seeing what's near it) is always one tap.
 - Each city links to your shared Google Maps lists (food, activities, coffee,
-  bars), so the curation you already do in Maps stays where it is.
+  bars — one list per category, each with its own icon), so the curation you
+  already do in Maps stays where it is.
+- **A lightweight place layer on top of your lists.** Places are imported from
+  your Google Maps lists — Maps stays the home for curating and seeing them on
+  the map — and effoff adds what Maps can't: tags ("ramen", "casual", "shoes"),
+  notes, and links to other sources (Tabelog for Japan, a friend's rec, a
+  review). effoff never asks you to curate places twice.
+- **Share the whole trip's lists at once.** Per-city × per-category lists are
+  great to use and a pain to share one by one. effoff holds every list link for
+  the trip and hands the full set to each trip member in one shot.
 - Planning happens on the web or on the iPhone app — both are first-class,
   and switching between them is seamless: start building a trip on a laptop,
   pick it up later from the couch on a phone (or the other way around), and
@@ -27,29 +48,42 @@ instead of trying to replace them.
 
 ### During the trip — live off your phone
 
-- **Today view** — the day's plan at a glance: what's next, when, where, and
-  the confirmation number to show at the desk.
+- **Today view** — the city you're in at the top, then the day as a schedule:
+  "check out at 11:00", "flight from HND to CTS at 14:30", "check in at
+  16:00", dinner reservation at 19:00 — with what's next highlighted, and the
+  address or confirmation number right there when you need it.
+- **Tickets on tap** — the flight ticket or booking confirmation you captured
+  while planning opens in one tap when you're at the desk or the gate.
 - **Apple Calendar sync** — itinerary items land in a calendar, so the trip
   shows up everywhere your calendar does.
 - **Apple Reminders sync** — trip to-dos land in Reminders with due times.
 - **One-tap city lists** — open the current city's Google Maps lists to see
   your pinned spots on the map when deciding where to go.
+- **Filter your places** — when the group can't decide, filter the current
+  city's places by tag: "ramen", "dessert", "park", "casual".
 
 ## Design principles
 
 - **Integrate, don't replace.** Google Maps lists, Apple Calendar, and Apple
   Reminders are already good at what they do. effoff links to them and syncs
-  with them; it doesn't rebuild them.
+  with them; it doesn't rebuild them. The place layer follows the same rule:
+  Maps is where places are curated and mapped, effoff only decorates them with
+  tags, notes, and links.
 - **A trip belongs to everyone going on it.** Sharing isn't a feature bolted on
   later — it's the default shape of a trip.
 - **Plan anywhere, live it from your phone.** Planning is fully supported on
   both web and phone, and moving between devices mid-plan is seamless — no
   "finish this on the computer". The in-trip experience is built for the
   phone in your pocket.
+- **The booking is the source.** You booked it somewhere else; effoff's job is
+  to capture that artifact once, extract what matters, and keep the original
+  close at hand.
 
 ## Non-goals (for now)
 
-- Replacing Google Maps lists or building a place database.
+- Building a global place database or replacing Google Maps curation. The
+  place layer is trip-scoped and imported from your own lists — effoff is not
+  a directory of the world's restaurants.
 - Booking flights, hotels, or anything else in-app — effoff organizes what you
   booked elsewhere.
 - Android — explicitly later, not never.
@@ -66,14 +100,26 @@ instead of trying to replace them.
 ## Roadmap
 
 1. **Foundation** — data model and Workers/D1 API: accounts, trips, members,
-   cities, itinerary items, to-dos, and per-city map-list links.
+   cities, itinerary items (timezone-aware), to-dos, attachments (ticket and
+   confirmation images), places with tags/notes/links, and per-city map-list
+   links.
 2. **Planning on the web** — web client for creating and editing trips
-   collaboratively.
-3. **iPhone app** — SwiftUI client: view/edit trips, today view, EventKit
+   collaboratively, including booking capture: upload a ticket/confirmation,
+   auto-extract the itinerary item, keep the image attached.
+3. **iPhone app** — SwiftUI client: view/edit trips, booking capture from
+   screenshots, today view, tickets on tap, place filtering, EventKit
    Calendar + Reminders sync, city map-list links.
 4. **In-trip polish** — offline cache, widgets and notifications, better
    share/invite flow.
 5. **Later** — Android, richer integrations.
+
+## Open questions
+
+- **Importing places from Google Maps lists.** Google has no official API for
+  saved lists, so the place layer's import path is one of: parsing a list's
+  share link, an iOS share-sheet "add to effoff" from Maps, or a Google
+  Takeout CSV import. To be settled when the place layer is built; the vision
+  doesn't depend on which one wins.
 
 ## Status
 
