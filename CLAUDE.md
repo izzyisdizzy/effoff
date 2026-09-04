@@ -4,9 +4,14 @@
 
 `effoff` — a collaborative trip planning app plus in-trip phone companion.
 Trips (cities, dates, itinerary items, to-dos) are planned together on web +
-iPhone; during the trip the phone gives a today view, syncs the itinerary to
-Apple Calendar and to-dos to Apple Reminders, and links each city to the user's
-shared Google Maps lists. See `README.md` for the full vision and roadmap.
+iPhone. Bookings are captured from uploaded tickets/confirmations
+(auto-extracted, timezone-aware, image kept attached); hotels get first-class
+check-in/checkout items and a per-trip hotel list. A lightweight place layer
+imports places from the user's shared Google Maps lists and adds tags, notes,
+and source links (Maps stays the curation home). During the trip the phone
+gives a today view (city + day schedule), one-tap tickets, syncs the itinerary
+to Apple Calendar and to-dos to Apple Reminders, and links each city to the
+Maps lists. See `README.md` for the full vision and roadmap.
 
 **Stack** (chosen 2026-09-04, nothing built yet): native SwiftUI iPhone app
 (EventKit for Calendar/Reminders); Cloudflare Workers (TypeScript) + D1
