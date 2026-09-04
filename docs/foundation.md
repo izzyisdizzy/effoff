@@ -30,10 +30,14 @@ User ─────< TripMember >───── Trip ─────< TripCity
 ### Trip, TripCity
 
 - `trips` — id, name, created_by, timestamps. Trip dates are **derived** from
-  its cities (**proposed**): each `trip_cities` row carries `arrival_date`,
-  `departure_date`, a display order, and an IANA timezone (e.g.
-  `Asia/Tokyo`). Deriving trip dates avoids a second source of truth that can
-  drift from the city list.
+  its cities (**decided**): each `trip_cities` row carries `arrival_date`,
+  `departure_date` — both **nullable** (**decided**) — a display order, and
+  an IANA timezone (e.g. `Asia/Tokyo`). Deriving trip dates avoids a second
+  source of truth that can drift from the city list. Nullable dates support
+  the real early-planning state ("we want Tokyo and Sapporo, order TBD"):
+  trip dates derive from whichever cities are dated and are null until one
+  is; the today view and self-starting behavior need a dated city, which any
+  trip has by the time it starts.
 - The city's timezone is the default for itinerary items created in that city,
   so users almost never pick a zone by hand.
 
@@ -94,9 +98,12 @@ bucket, no signed URLs in v1.
 - **Proposed: no roles in v1** — the README says a trip belongs to everyone
   on it; every member can edit everything. One carve-out: only the creator
   can delete the trip.
-- `invites` — token, trip_id, created_by, expiry. Share a link; opening it
-  while signed in joins the trip. No per-email invites in v1 (people share
-  trip links in the group chat anyway).
+- `invites` — token, trip_id, created_by, `expires_at`, `revoked_at`. Share
+  a link; opening it while signed in joins the trip. **Decided: both expiry
+  and revocation** — links expire 30 days after creation *and* can be
+  revoked early from trip settings (revoke = set `revoked_at`; "new link" =
+  revoke + create). No per-email invites in v1 (people share trip links in
+  the group chat anyway).
 
 ## Trip lifecycle (**proposed**)
 
@@ -115,7 +122,7 @@ must not grow validation like "can't edit past items" or "trip is
 read-only after end date" — flexibility is the requirement, and statelessness
 here is what keeps it free.
 
-## Auth (**proposed**)
+## Auth (**decided**)
 
 **Sign in with Apple only, v1.** It works natively on iOS and via Apple's JS
 on the web, so both clients share one identity system, and the target user
@@ -125,8 +132,8 @@ cookie for the web SPA, an opaque bearer token for the iOS app — both random
 IDs looked up in a `sessions` table (D1 hit per request is fine at this
 scale, and revocation stays trivial).
 
-Risk to flag: a rare collaborator with no Apple ID can't join. Accepted for
-v1; magic-link email is the obvious later addition and slots in as just
+Known gap, accepted: a rare collaborator with no Apple ID can't join in v1.
+Magic-link email is the designated later addition and slots in as just
 another provider row on `users`.
 
 ## API shape
@@ -212,18 +219,19 @@ Monorepo, one deploy for backend + web. `wrangler d1 migrations` for schema.
 6. Attachments (R2 upload/stream).
 7. Trip-doc GET with version counter + 304s.
 
+## Decisions (settled 2026-09-04)
+
+- **Auth: Sign in with Apple only for v1.** The no-Apple-ID gap is accepted;
+  magic-link email is the designated later addition.
+- **City dates are nullable.** Dateless cities are a real early-planning
+  state; trip dates derive from whichever cities are dated.
+- **Invite links: 30-day expiry *and* revocable** from trip settings.
+- **Calendar/Reminders sync clips to your presence window by default**, with
+  a per-trip toggle to sync the whole trip instead. (Implementation lands
+  with the iOS EventKit work in Phase 3; the presence-window data it needs
+  ships in Phase 1.)
+
 ## Open questions
 
-- **Apple-only auth** — accept the "no Apple ID" gap for v1? (Recommended:
-  yes.)
-- **City dates** — derived trip dates assume every city has dates; is a
-  "cities but no dates yet" early-planning state needed? If so, dates go
-  nullable and trip dates fall back to null.
-- **Invite links** — expiry/revocation semantics: fixed 30-day expiry, or
-  revocable from trip settings?
-- **Presence windows vs. sync** — should Apple Calendar/Reminders sync clip
-  to the member's personal arrival/departure window (only sync the days
-  you're there), or always sync the whole trip? (Leaning: sync your window
-  by default, with a toggle.)
 - Carried from the README: the Google Maps list **import path** (share link
   vs share sheet vs Takeout) — still deferred to the place-layer work.
