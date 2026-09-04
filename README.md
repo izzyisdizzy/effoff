@@ -114,22 +114,49 @@ instead of trying to replace them.
 
 ## Roadmap
 
-1. **Foundation** — data model and Workers/D1 API: accounts, trips, members,
-   cities, itinerary items (timezone-aware), to-dos, attachments (ticket and
-   confirmation images), places with tags/notes/links, and per-city map-list
-   links.
-2. **Planning on the web** — web client for creating and editing trips
-   collaboratively, including booking capture: upload a ticket/confirmation,
-   auto-extract the itinerary item, keep the image attached.
-3. **iPhone app** — SwiftUI client: view/edit trips, booking capture from
-   screenshots, today view, tickets on tap, place filtering, EventKit
-   Calendar + Reminders sync, city map-list links.
-4. **In-trip polish** — offline cache, widgets and notifications, better
-   share/invite flow.
-5. **Later** — Android; richer integrations; **settle up** — a bills area
-   for figuring out who owes who during and after the trip, likely by making
-   the `payback` engine extensible and building on it rather than rewriting
-   the money math.
+Phases 1–4 track the open issues in the tracker. Phase 5 is a list of ideas,
+not commitments.
+
+### Phase 1 — Foundation
+
+- Scaffold the Cloudflare Workers + D1 API project.
+- D1 schema for trips, members, cities, itinerary items (timezone-aware),
+  to-dos, attachments (ticket and confirmation images), places with
+  tags/notes/links, and per-city map-list links.
+- Auth, sessions, and trip invites.
+- CRUD API endpoints for trips, cities, itinerary items, and to-dos.
+
+### Phase 2 — Planning on the web
+
+- Scaffold the web app: sign-in, trip list, trip overview, invites.
+- Collaborative itinerary and to-do editing.
+- Booking capture: upload a ticket or confirmation, auto-extract the
+  itinerary item, keep the image attached.
+
+### Phase 3 — iPhone app
+
+- SwiftUI app with the core planning views: trips, cities, itinerary, and
+  to-dos — the same collaborative plan, phone-first, including booking
+  capture from screenshots.
+
+### Phase 4 — In-trip experience
+
+- The today view: current city, the day as a schedule, what's next
+  highlighted, tickets on tap.
+- Sync the itinerary to Apple Calendar and trip to-dos to Apple Reminders
+  (EventKit).
+- One-tap links to each city's Google Maps lists, plus tag-filtered places.
+
+### Phase 5 — Later (ideas, not commitments)
+
+- Android.
+- Booking-confirmation email import.
+- Offline support, widgets, and notifications.
+- Trip recaps / photo journal.
+- **Settle up** — a bills area for figuring out who owes who during and
+  after the trip, likely by making the `payback` engine extensible and
+  building on it rather than rewriting the money math.
+- Richer share/invite flows and integrations.
 
 ## Open questions
 
