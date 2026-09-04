@@ -21,7 +21,9 @@ instead of trying to replace them.
 - Each city links to your shared Google Maps lists (food, activities, coffee,
   bars), so the curation you already do in Maps stays where it is.
 - Planning happens on the web or on the iPhone app — both are first-class,
-  so a trip can be built out from a laptop or from the couch on a phone.
+  and switching between them is seamless: start building a trip on a laptop,
+  pick it up later from the couch on a phone (or the other way around), and
+  the trip is always current on every device.
 
 ### During the trip — live off your phone
 
@@ -41,8 +43,9 @@ instead of trying to replace them.
 - **A trip belongs to everyone going on it.** Sharing isn't a feature bolted on
   later — it's the default shape of a trip.
 - **Plan anywhere, live it from your phone.** Planning is fully supported on
-  both web and phone; the in-trip experience is built for the phone in your
-  pocket.
+  both web and phone, and moving between devices mid-plan is seamless — no
+  "finish this on the computer". The in-trip experience is built for the
+  phone in your pocket.
 
 ## Non-goals (for now)
 
