@@ -13,8 +13,8 @@ instead of trying to replace them.
 
 ### Before the trip — plan together
 
-- Trips are collaborative by default: everyone going on the trip can view and
-  edit the plan.
+- Trips are collaborative by default: invite the people you're traveling
+  with, and everyone on the trip can view and edit the plan.
 - **Not everyone flies together.** On group trips, each member can have their
   own arrival and departure — join two days late, duck out early — and the
   app knows whose trip runs when.
@@ -101,8 +101,8 @@ instead of trying to replace them.
   booked elsewhere.
 - Android — explicitly later, not never.
 - Social or discovery features. This is for your trips, not a feed.
-- Expense tracking in the first versions — a settle-up area is on the
-  long-term roadmap (see below), not in v1.
+- Expense tracking in the first versions — a settle-up area is a Phase 5
+  idea (see the roadmap), not in v1.
 
 ## Stack
 
@@ -114,17 +114,21 @@ instead of trying to replace them.
 
 ## Roadmap
 
-Phases 1–4 track the open issues in the tracker. Phase 5 is a list of ideas,
-not commitments.
+Phases 1–4 correspond to the tracker's `phase-1`–`phase-4` issue labels,
+though not every bullet has an issue filed yet (booking capture, the
+attachments it needs, and the place layer still need theirs). Phase 5 is a
+list of ideas, not commitments.
 
 ### Phase 1 — Foundation
 
 - Scaffold the Cloudflare Workers + D1 API project.
 - D1 schema for trips, members, cities, itinerary items (timezone-aware),
-  to-dos, attachments (ticket and confirmation images), places with
-  tags/notes/links, and per-city map-list links.
+  and to-dos.
 - Auth, sessions, and trip invites.
 - CRUD API endpoints for trips, cities, itinerary items, and to-dos.
+- The fuller data-model and API plan — including attachments, places, and
+  map lists — lives in [`docs/foundation.md`](docs/foundation.md); issues
+  for those pieces are still to be filed.
 
 ### Phase 2 — Planning on the web
 
@@ -139,15 +143,15 @@ not commitments.
   to-dos — the same collaborative plan, phone-first, including booking
   capture from screenshots.
 
-### Phase 4 — In-trip experience
+### Phase 4 — In-trip polish
 
 - The today view: current city, the day as a schedule, what's next
   highlighted, tickets on tap.
 - Sync the itinerary to Apple Calendar and trip to-dos to Apple Reminders
   (EventKit).
-- One-tap links to each city's Google Maps lists, plus tag-filtered places.
+- One-tap links to each city's Google Maps lists.
 
-### Phase 5 — Later (ideas, not commitments)
+### Phase 5 — Later
 
 - Android.
 - Booking-confirmation email import.
