@@ -169,8 +169,10 @@ Phase 5 is a list of ideas, not commitments.
 
 ## Status
 
-Pre-code. This README is the source of truth for direction; the stack is
-chosen but nothing is built yet.
+In progress. This README is the source of truth for direction. The backend
+scaffold is in place (`backend/`: Cloudflare Worker + Hono + D1 with
+migrations and a tested health endpoint); the web SPA and iPhone app are not
+started yet.
 
 ## License
 

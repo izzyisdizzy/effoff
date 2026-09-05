@@ -9,7 +9,7 @@
     "deploy": "wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint",
+    "lint": "oxlint --deny-warnings",
     "format": "oxfmt",
     "migrate": "wrangler d1 migrations apply effoff-db --local",
     "cf-typegen": "wrangler types"

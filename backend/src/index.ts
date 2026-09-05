@@ -1,12 +1,10 @@
 import { Hono } from "hono";
 
-const app = new Hono<{ Bindings: Env }>();
-
-const api = new Hono<{ Bindings: Env }>();
+const app = new Hono<{ Bindings: Env }>().basePath("/api");
 
 // Proves the Worker runs and can round-trip to D1. Real endpoints live under
 // /api/v1 (see docs/foundation.md) and arrive with later issues.
-api.get("/health", async (c) => {
+app.get("/health", async (c) => {
   try {
     const row = await c.env.DB.prepare(
       "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -16,11 +14,11 @@ api.get("/health", async (c) => {
     }
     return c.json({ ok: true, db: true, schemaVersion: row.value });
   } catch (error) {
-    console.error(JSON.stringify({ event: "health_db_check_failed", error: String(error) }));
+    // Pass the raw error so Workers observability captures it (with stack)
+    // as structured log arguments.
+    console.error("health_db_check_failed", error);
     return c.json({ ok: false, db: false }, 503);
   }
 });
-
-app.route("/api", api);
 
 export default app;

@@ -41,9 +41,11 @@ Tests apply all migrations to a fresh in-memory D1 automatically
 
 ## Health check
 
-`GET /api/health` → `200 {"ok":true,"db":true,"schemaVersion":"1"}` — the
-`db` field reflects a real query against the migrated `meta` table, so it
-proves the Worker↔D1 round-trip, not just that the Worker is up.
+`GET /api/health` → `200 {"ok":true,"db":true,"schemaVersion":"<version>"}` —
+`schemaVersion` echoes the `meta` table's current `schema_version` row (seeded
+by the migrations; the migration files are the source of truth for its value),
+and `db` reflects that real query, so the endpoint proves the Worker↔D1
+round-trip, not just that the Worker is up.
 
 ## Conventions
 
