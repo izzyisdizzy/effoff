@@ -114,10 +114,8 @@ instead of trying to replace them.
 
 ## Roadmap
 
-Phases 1–4 correspond to the tracker's `phase-1`–`phase-4` issue labels,
-though not every bullet has an issue filed yet (booking capture, the
-attachments it needs, and the place layer still need theirs). Phase 5 is a
-list of ideas, not commitments.
+Phases 1–4 correspond to the tracker's `phase-1`–`phase-4` issue labels.
+Phase 5 is a list of ideas, not commitments.
 
 ### Phase 1 — Foundation
 
@@ -127,8 +125,7 @@ list of ideas, not commitments.
 - Auth, sessions, and trip invites.
 - CRUD API endpoints for trips, cities, itinerary items, and to-dos.
 - The fuller data-model and API plan — including attachments, places, and
-  map lists — lives in [`docs/foundation.md`](docs/foundation.md); issues
-  for those pieces are still to be filed.
+  map lists — lives in [`docs/foundation.md`](docs/foundation.md).
 
 ### Phase 2 — Planning on the web
 
