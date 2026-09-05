@@ -68,7 +68,10 @@ CREATE TABLE trip_cities (
 );
 
 -- Schedule content. city_id is nullable because flights span cities (and a
--- deleted city must not delete its items — SET NULL). A stay is one row
+-- deleted city must not delete its items — SET NULL). Caveat for the sync
+-- layer: the FK's SET NULL does not bump updated_at on the affected items,
+-- so app-level city deletion must null city_id explicitly (with updated_at)
+-- in the same batch, leaving the FK action as a backstop. A stay is one row
 -- holding check-in (start) and checkout (end); clients project it into two
 -- schedule entries. All time columns are nullable: untimed/undated items are
 -- a real planning state. Per-end zones exist for flights (depart in the
@@ -105,7 +108,7 @@ CREATE TABLE todos (
   id TEXT PRIMARY KEY,
   trip_id TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
   title TEXT NOT NULL,
-  done INTEGER NOT NULL DEFAULT 0,
+  done INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0, 1)),
   due_local TEXT,
   due_tz TEXT,
   assignee_user_id TEXT REFERENCES users(id),
@@ -113,11 +116,18 @@ CREATE TABLE todos (
   updated_at TEXT NOT NULL
 );
 
--- Indexes for the obvious access paths (everything else is by-trip via FKs
--- that SQLite already needs indexed on the child side for cascades).
+-- Indexes for the read paths plus every FK child column whose parent rows
+-- get deleted (SQLite auto-indexes only PK/UNIQUE, never FK child columns,
+-- so an unindexed child column means a full table scan on every parent
+-- delete — and D1 bills rows_read). trip_members(trip_id) is covered by the
+-- leftmost column of its composite PK. The user-side child columns
+-- (trips.created_by, todos.assignee_user_id) are deliberately unindexed:
+-- nothing deletes users in v1.
 CREATE INDEX idx_trip_members_user ON trip_members(user_id);
 CREATE INDEX idx_trip_cities_trip_position ON trip_cities(trip_id, position);
 CREATE INDEX idx_itinerary_items_trip_start ON itinerary_items(trip_id, start_utc);
+CREATE INDEX idx_itinerary_items_city ON itinerary_items(city_id);
 CREATE INDEX idx_todos_trip ON todos(trip_id);
 
-UPDATE meta SET value = '2' WHERE key = 'schema_version';
+INSERT INTO meta (key, value) VALUES ('schema_version', '2')
+  ON CONFLICT (key) DO UPDATE SET value = excluded.value;

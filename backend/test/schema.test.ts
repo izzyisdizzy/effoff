@@ -2,8 +2,8 @@ import { env } from "cloudflare:workers";
 import { beforeEach, describe, expect, it } from "vitest";
 
 // Exercises the core schema from 0002_core_schema.sql against the migrated
-// local D1: the happy-path object graph, FK enforcement, the kind CHECK,
-// and trip-deletion cascade behavior.
+// local D1: the happy-path object graph, FK enforcement, CHECK and UNIQUE
+// constraints, and trip-deletion cascade behavior.
 
 const NOW = "2026-09-05T12:00:00Z";
 
@@ -84,6 +84,10 @@ async function seedTrip() {
       NOW,
       NOW,
     ),
+    // An untimed activity: all time columns NULL, ordered manually by position.
+    env.DB.prepare(
+      "INSERT INTO itinerary_items (id, trip_id, city_id, kind, title, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind("item-idea", "trip-1", "city-cts", "activity", "Ski day (sometime)", 0, NOW, NOW),
     env.DB.prepare(
       "INSERT INTO todos (id, trip_id, title, done, assignee_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     ).bind("todo-1", "trip-1", "Book rail passes", 0, "user-1", NOW, NOW),
@@ -94,12 +98,14 @@ describe("core schema (0002)", () => {
   it("stores a full trip graph and reads it back", async () => {
     await seedTrip();
 
+    // A bare ORDER BY start_utc would sort NULLs (untimed items) first; the
+    // timeline query must push them after the timed schedule, by position.
     const items = await env.DB.prepare(
-      "SELECT * FROM itinerary_items WHERE trip_id = ? ORDER BY start_utc",
+      "SELECT * FROM itinerary_items WHERE trip_id = ? ORDER BY start_utc IS NULL, start_utc, position",
     )
       .bind("trip-1")
       .all<Record<string, unknown>>();
-    expect(items.results.map((r) => r.id)).toEqual(["item-stay", "item-flight"]);
+    expect(items.results.map((r) => r.id)).toEqual(["item-stay", "item-flight", "item-idea"]);
 
     const flight = items.results[1];
     expect(flight?.city_id).toBeNull();
@@ -133,6 +139,35 @@ describe("core schema (0002)", () => {
         "INSERT INTO itinerary_items (id, trip_id, kind, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
       )
         .bind("item-bad", "trip-1", "teleport", "Beam me up", NOW, NOW)
+        .run(),
+    ).rejects.toThrow(/CHECK/i);
+  });
+
+  it("rejects a duplicate auth identity and a duplicate membership", async () => {
+    await seedTrip();
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO users (id, auth_provider, auth_subject, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+        .bind("user-2", "apple", "sub-1", "Imposter", NOW, NOW)
+        .run(),
+    ).rejects.toThrow(/UNIQUE/i);
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO trip_members (trip_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      )
+        .bind("trip-1", "user-1", NOW, NOW)
+        .run(),
+    ).rejects.toThrow(/UNIQUE/i);
+  });
+
+  it("rejects a todo done value outside 0/1", async () => {
+    await seedTrip();
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO todos (id, trip_id, title, done, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+        .bind("todo-bad", "trip-1", "Overdone", 7, NOW, NOW)
         .run(),
     ).rejects.toThrow(/CHECK/i);
   });
