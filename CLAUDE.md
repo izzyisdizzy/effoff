@@ -13,9 +13,37 @@ gives a today view (city + day schedule), one-tap tickets, syncs the itinerary
 to Apple Calendar and to-dos to Apple Reminders, and links each city to the
 Maps lists. See `README.md` for the full vision and roadmap.
 
-**Stack** (chosen 2026-09-04, nothing built yet): native SwiftUI iPhone app
-(EventKit for Calendar/Reminders); Cloudflare Workers (TypeScript) + D1
-backend; TypeScript web SPA served from the same Worker.
+**Stack** (chosen 2026-09-04): native SwiftUI iPhone app (EventKit for
+Calendar/Reminders); Cloudflare Workers (TypeScript) + D1 backend; TypeScript
+web SPA served from the same Worker.
+
+## Layout
+
+Monorepo (per `docs/foundation.md`); only `backend/` exists so far — `web/`
+(Phase 2) and `ios/` (Phase 3) come later.
+
+- `backend/` — Cloudflare Worker (TypeScript, Hono) + D1 with
+  `wrangler d1 migrations`. See `backend/README.md` for commands and
+  conventions.
+- `docs/` — design notes; `docs/foundation.md` is the backend plan.
+
+## Running / testing the backend
+
+From `backend/` (`npm install` first): `npm run dev` (local server on
+`:8787`), `npm test` (Vitest inside workerd with a real migrated local D1),
+`npm run typecheck`, `npm run lint`, `npm run format`, `npm run migrate`
+(local D1), `npm run deploy`. Details in `backend/README.md`.
+
+## Conventions
+
+- TypeScript strict; Hono for routing; REST JSON under `/api/v1`
+  (health check at `/api/health` is the exception).
+- Lint/format: oxlint + oxfmt. Tests: Vitest with
+  `@cloudflare/vitest-pool-workers`.
+- `backend/worker-configuration.d.ts` is generated (`npm run cf-typegen`) —
+  never hand-edit.
+- Schema changes only via `wrangler d1 migrations` files in
+  `backend/migrations/`.
 
 ## Ground rules
 
@@ -23,7 +51,7 @@ backend; TypeScript web SPA served from the same Worker.
 - This repo lives inside the `~/Development` workspace — follow the workspace
   `CLAUDE.md` anchoring rules (`git -C /Users/ibennett/Development/effoff ...`,
   absolute paths, never commit from the workspace root).
-- The README is the source of truth for product direction until code exists —
-  keep it in sync with any scope or stack decisions.
-- Once real code lands, update this file (how to run it, conventions, layout)
-  and keep the stack column in the workspace `CLAUDE.md` repos table accurate.
+- The README is the source of truth for product direction — keep it in sync
+  with any scope or stack decisions.
+- Keep this file (how to run it, conventions, layout) and the stack column in
+  the workspace `CLAUDE.md` repos table accurate as code lands.
