@@ -188,7 +188,7 @@ v1 is **poll + last-write-wins per row**, not real-time:
 
 ## Deliberately out of scope (but not blocked)
 
-**Settle up / who-owes-who** is on the long-term roadmap, not Phase 1 — no
+**Settle up / who-owes-who** is a Phase 5 roadmap idea, not Phase 1 — no
 expense tables in this schema. Nothing here blocks it: expenses would arrive
 as new trip-scoped tables (expense, payer, splits) keyed to `trip_members`,
 and the likely path is extracting the `payback` repo's money math into a
@@ -228,8 +228,8 @@ Monorepo, one deploy for backend + web. `wrangler d1 migrations` for schema.
 - **Invite links: 30-day expiry *and* revocable** from trip settings.
 - **Calendar/Reminders sync clips to your presence window by default**, with
   a per-trip toggle to sync the whole trip instead. (Implementation lands
-  with the iOS EventKit work in Phase 3; the presence-window data it needs
-  ships in Phase 1.)
+  with the EventKit work in Phase 4 — In-trip polish; the presence-window
+  data it needs ships in Phase 1.)
 
 ## Open questions
 
