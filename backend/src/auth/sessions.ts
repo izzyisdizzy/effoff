@@ -56,7 +56,7 @@ export async function getSessionWithUser(
   if (session === null) {
     return null;
   }
-  if (session.expires_at <= new Date().toISOString()) {
+  if (Date.parse(session.expires_at) <= Date.now()) {
     await db.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(hash).run();
     return null;
   }
@@ -70,6 +70,19 @@ export async function getSessionWithUser(
   return { session, user };
 }
 
-export async function deleteSession(db: D1Database, tokenHash: string): Promise<void> {
-  await db.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(tokenHash).run();
+// Takes the row (not a string) so a raw token can't be passed where the hash
+// belongs — that mistake would compile, delete nothing, and report success.
+export async function deleteSession(db: D1Database, session: SessionRow): Promise<void> {
+  await db.prepare("DELETE FROM sessions WHERE token_hash = ?").bind(session.token_hash).run();
+}
+
+// Sign-in-time cleanup. Expired web sessions are never presented again (the
+// browser drops the cookie at the same moment the row expires), so without
+// this they would accumulate forever; lazy deletion in getSessionWithUser
+// only catches tokens that do come back.
+export async function deleteExpiredSessions(db: D1Database, userId: string): Promise<void> {
+  await db
+    .prepare("DELETE FROM sessions WHERE user_id = ? AND expires_at <= ?")
+    .bind(userId, new Date().toISOString())
+    .run();
 }

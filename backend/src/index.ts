@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { apiError } from "./api-error";
 import auth from "./routes/auth";
 import invites from "./routes/invites";
 import type { AppEnv } from "./types";
@@ -28,5 +29,13 @@ const v1 = new Hono<AppEnv>();
 v1.route("/", auth);
 v1.route("/", invites);
 app.route("/v1", v1);
+
+// Keep the { error: { code, message } } contract on the paths Hono would
+// otherwise answer with plain text: unknown routes and uncaught throws.
+app.notFound((c) => apiError(c, 404, "not_found", "No such endpoint."));
+app.onError((error, c) => {
+  console.error("unhandled_error", error);
+  return apiError(c, 500, "internal_error", "Something went wrong.");
+});
 
 export default app;

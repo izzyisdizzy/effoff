@@ -1,10 +1,14 @@
 import { env } from "cloudflare:workers";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { activateAppleJwksMock, makeIdentityToken, signInIos } from "./apple";
 
 beforeAll(async () => {
   await activateAppleJwksMock();
+});
+
+afterAll(() => {
+  vi.unstubAllGlobals();
 });
 
 function signInRequest(body: unknown): RequestInit {
@@ -84,9 +88,26 @@ describe("POST /api/v1/auth/sign-in", () => {
     expect(body.user.displayName).toBe("Trip member");
   });
 
-  it("ios client gets a bearer token that authenticates /me", async () => {
-    const { token, user } = await signInIos("apple-sub-ios");
+  it("ios client gets a bearer token (with its expiry) that authenticates /me", async () => {
+    const res = await app.request(
+      "/api/v1/auth/sign-in",
+      signInRequest({
+        identityToken: await makeIdentityToken({ sub: "apple-sub-ios" }),
+        client: "ios",
+      }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const { token, user, expiresAt } = (await res.json()) as {
+      token: string;
+      user: { id: string };
+      expiresAt: string;
+    };
     expect(token).toEqual(expect.any(String));
+    // iOS must be told when the session dies so it can re-auth pre-emptively.
+    const ttlMs = Date.parse(expiresAt) - Date.now();
+    expect(ttlMs).toBeGreaterThan(89 * 24 * 3600 * 1000);
+    expect(ttlMs).toBeLessThanOrEqual(90 * 24 * 3600 * 1000);
 
     const me = await app.request(
       "/api/v1/me",
@@ -113,6 +134,50 @@ describe("POST /api/v1/auth/sign-in", () => {
     expect(await res.json()).toEqual(errorShape);
   });
 
+  it("accepts a token audienced for any configured client id", async () => {
+    // Second entry of APPLE_CLIENT_IDS — exercises the list parsing.
+    const res = await app.request(
+      "/api/v1/auth/sign-in",
+      signInRequest({
+        identityToken: await makeIdentityToken({
+          sub: "apple-sub-web-aud",
+          aud: "com.effoff.test-web",
+        }),
+        client: "ios",
+      }),
+      env,
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("stores only a hash of the session token", async () => {
+    const { token, user } = await signInIos("apple-sub-hash");
+    const row = await env.DB.prepare("SELECT token_hash FROM sessions WHERE user_id = ?")
+      .bind(user.id)
+      .first<{ token_hash: string }>();
+    expect(row?.token_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(row?.token_hash).not.toBe(token);
+    expect(row?.token_hash).not.toContain(token);
+  });
+
+  it("503s (not 401) when the JWKS cannot be fetched", async () => {
+    const identityToken = await makeIdentityToken({ sub: "apple-sub-outage" });
+    vi.stubGlobal("fetch", () => Promise.reject(new TypeError("network down")));
+    try {
+      const res = await app.request(
+        "/api/v1/auth/sign-in",
+        signInRequest({ identityToken, client: "ios" }),
+        env,
+      );
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({
+        error: { code: "apple_unavailable", message: expect.any(String) },
+      });
+    } finally {
+      await activateAppleJwksMock();
+    }
+  });
+
   it("rejects a malformed body with 400", async () => {
     const res = await app.request(
       "/api/v1/auth/sign-in",
@@ -137,6 +202,26 @@ describe("GET /api/v1/me", () => {
     );
     expect(garbage.status).toBe(401);
     expect(await garbage.json()).toEqual(errorShape);
+  });
+
+  it("401s an expired session and deletes its row", async () => {
+    const { token, user } = await signInIos("apple-sub-expired");
+    // Sessions from other tests share the DB — expire only this user's.
+    await env.DB.prepare("UPDATE sessions SET expires_at = ? WHERE user_id = ?")
+      .bind(new Date(Date.now() - 1000).toISOString(), user.id)
+      .run();
+
+    const me = await app.request(
+      "/api/v1/me",
+      { headers: { authorization: `Bearer ${token}` } },
+      env,
+    );
+    expect(me.status).toBe(401);
+
+    const remaining = await env.DB.prepare("SELECT COUNT(*) AS n FROM sessions WHERE user_id = ?")
+      .bind(user.id)
+      .first<{ n: number }>();
+    expect(remaining?.n).toBe(0);
   });
 });
 

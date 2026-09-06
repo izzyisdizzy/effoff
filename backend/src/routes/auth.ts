@@ -5,6 +5,7 @@ import { APPLE_PROVIDER, verifyAppleIdentityToken } from "../auth/apple";
 import { requireSession } from "../auth/middleware";
 import {
   createSession,
+  deleteExpiredSessions,
   deleteSession,
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
@@ -27,6 +28,17 @@ async function upsertUser(
     .bind(APPLE_PROVIDER, subject);
   const existing = await select.first<UserRow>();
   if (existing !== null) {
+    // Apple often omits the email claim after the first authorization, so a
+    // null email is backfilled when a later token does carry one. The name is
+    // never touched (per the spec) — display_name repair has no path yet.
+    if (existing.email === null && email !== undefined) {
+      const updatedAt = new Date().toISOString();
+      await db
+        .prepare("UPDATE users SET email = ?, updated_at = ? WHERE id = ?")
+        .bind(email, updatedAt, existing.id)
+        .run();
+      return { ...existing, email, updated_at: updatedAt };
+    }
     return existing;
   }
   const now = new Date().toISOString();
@@ -89,6 +101,17 @@ auth.post("/auth/sign-in", async (c) => {
   }
   const verification = await verifyAppleIdentityToken(identityToken, c.env);
   if (!verification.ok) {
+    // Observability is the only place these surface — the client just sees
+    // the status code (compare the health check's error logging).
+    console.error("apple_verification_failed", verification.failure, verification.reason);
+    if (verification.failure === "jwks_unavailable") {
+      return apiError(
+        c,
+        503,
+        "apple_unavailable",
+        "Could not reach Apple to verify the identity token; try again shortly.",
+      );
+    }
     return apiError(
       c,
       401,
@@ -102,7 +125,8 @@ auth.post("/auth/sign-in", async (c) => {
     verification.claims.email,
     displayName,
   );
-  const { token } = await createSession(c.env.DB, user.id, client);
+  await deleteExpiredSessions(c.env.DB, user.id);
+  const { token, expiresAt } = await createSession(c.env.DB, user.id, client);
   if (client === "web") {
     setCookie(c, SESSION_COOKIE, token, {
       httpOnly: true,
@@ -113,12 +137,14 @@ auth.post("/auth/sign-in", async (c) => {
     });
     return c.json({ user: publicUser(user) });
   }
-  return c.json({ user: publicUser(user), token });
+  // The cookie's Max-Age tells web when the session ends; iOS needs the
+  // equivalent alongside the bearer token so it can re-auth before a 401.
+  return c.json({ user: publicUser(user), token, expiresAt });
 });
 
 auth.post("/auth/sign-out", requireSession, async (c) => {
   const session = c.get("session");
-  await deleteSession(c.env.DB, session.token_hash);
+  await deleteSession(c.env.DB, session);
   if (session.client === "web") {
     deleteCookie(c, SESSION_COOKIE, { path: "/" });
   }

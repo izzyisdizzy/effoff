@@ -1,10 +1,14 @@
 import { env } from "cloudflare:workers";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { activateAppleJwksMock, seedTrip, signInIos } from "./apple";
 
 beforeAll(async () => {
   await activateAppleJwksMock();
+});
+
+afterAll(() => {
+  vi.unstubAllGlobals();
 });
 
 function post(token?: string): RequestInit {
@@ -33,7 +37,10 @@ describe("POST /api/v1/trips/:id/invites", () => {
     };
     expect(body.invite.tripId).toBe(tripId);
     expect(body.invite.token).toEqual(expect.any(String));
-    expect(new Date(body.invite.expiresAt).getTime()).toBeGreaterThan(Date.now());
+    // Pin the 30-day TTL, not just "sometime in the future".
+    const ttlMs = Date.parse(body.invite.expiresAt) - Date.now();
+    expect(ttlMs).toBeGreaterThan(29 * 24 * 3600 * 1000);
+    expect(ttlMs).toBeLessThanOrEqual(30 * 24 * 3600 * 1000);
   });
 
   it("403s a signed-in non-member and 401s an unauthenticated caller", async () => {

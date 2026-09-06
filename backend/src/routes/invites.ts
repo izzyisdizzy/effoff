@@ -36,25 +36,20 @@ invites.post("/invites/:token/accept", requireSession, async (c) => {
   if (invite.revoked_at !== null) {
     return apiError(c, 410, "invite_revoked", "Invite has been revoked.");
   }
-  if (invite.expires_at <= new Date().toISOString()) {
+  if (Date.parse(invite.expires_at) <= Date.now()) {
     return apiError(c, 410, "invite_expired", "Invite has expired.");
   }
   const userId = c.get("user").id;
-  const membership = await c.env.DB.prepare(
-    "SELECT user_id FROM trip_members WHERE trip_id = ? AND user_id = ?",
-  )
-    .bind(invite.trip_id, userId)
-    .first<{ user_id: string }>();
-  if (membership !== null) {
-    return c.json({ tripId: invite.trip_id, alreadyMember: true });
-  }
   const now = new Date().toISOString();
-  await c.env.DB.prepare(
-    "INSERT INTO trip_members (trip_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
+  // OR IGNORE makes accept race-free on the (trip_id, user_id) PK: two
+  // concurrent accepts (double-tap, client retry) both succeed, one as a
+  // no-op, instead of the loser 500ing on the constraint.
+  const result = await c.env.DB.prepare(
+    "INSERT OR IGNORE INTO trip_members (trip_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
   )
     .bind(invite.trip_id, userId, now, now)
     .run();
-  return c.json({ tripId: invite.trip_id, alreadyMember: false });
+  return c.json({ tripId: invite.trip_id, alreadyMember: result.meta.changes === 0 });
 });
 
 export default invites;

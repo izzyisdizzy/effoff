@@ -10,8 +10,8 @@ export default defineConfig({
         bindings: {
           // Exposed to tests so setup can apply migrations to the fresh D1.
           TEST_MIGRATIONS: await readD1Migrations(path.join(import.meta.dirname, "migrations")),
-          // Point Apple verification at the fetchMock-served test JWKS
-          // (test/apple.ts) instead of appleid.apple.com.
+          // Point Apple verification at the test JWKS served by the stubbed
+          // fetch in test/apple.ts instead of appleid.apple.com.
           APPLE_JWKS_URL: "https://apple-jwks.test/keys",
           APPLE_CLIENT_IDS: "com.effoff.test-ios,com.effoff.test-web",
         },

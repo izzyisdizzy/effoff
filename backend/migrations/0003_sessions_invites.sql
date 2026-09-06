@@ -23,6 +23,9 @@ CREATE TABLE sessions (
 -- Trip share links. Opening one while signed in joins the trip. Links
 -- expire 30 days after creation and can be revoked early (revoked_at set by
 -- the trip-settings flow; the column lands now, the endpoint comes later).
+-- Unlike session tokens, invite tokens are stored raw: trip settings must be
+-- able to display the live invite URL, and the 30-day expiry + revocation
+-- bound the exposure if the database leaks.
 CREATE TABLE invites (
   token TEXT PRIMARY KEY,
   trip_id TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,

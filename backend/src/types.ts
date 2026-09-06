@@ -28,7 +28,9 @@ export type InviteRow = {
 };
 
 // Hono type environment for every route: D1 bindings plus the per-request
-// context that requireSession loads.
+// context that requireSession loads. The Variables are typed non-optional in
+// the usual Hono idiom, so reading them is only safe in handlers chained
+// after requireSession — requireTripMember carries a runtime backstop.
 export type AppEnv = {
   Bindings: Env;
   Variables: {

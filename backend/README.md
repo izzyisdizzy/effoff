@@ -55,7 +55,9 @@ verifies the Apple identity token (RS256 against Apple's JWKS), upserts the
 user by `(auth_provider, auth_subject)`, and issues an opaque 90-day session —
 an HttpOnly `effoff_session` cookie for `web`, a bearer token in the JSON body
 for `ios`. Only the SHA-256 of the token is stored (`sessions` table).
-`POST /auth/sign-out` revokes; `GET /me` returns the signed-in user. Trip
+`POST /auth/sign-out` revokes; `GET /me` returns the signed-in user. A bad
+token gets 401; a JWKS/upstream failure gets 503 (`apple_unavailable`) so
+clients don't treat an Apple outage as an invalid credential. Trip
 membership is granted via invite links: any member mints one
 (`POST /trips/:id/invites`, 30-day expiry) and a signed-in user joins with
 `POST /invites/:token/accept`. All trip-scoped routes sit behind the
