@@ -7,9 +7,13 @@ export default defineConfig({
     cloudflareTest(async () => ({
       wrangler: { configPath: path.join(import.meta.dirname, "wrangler.jsonc") },
       miniflare: {
-        // Exposed to tests so setup can apply migrations to the fresh D1.
         bindings: {
+          // Exposed to tests so setup can apply migrations to the fresh D1.
           TEST_MIGRATIONS: await readD1Migrations(path.join(import.meta.dirname, "migrations")),
+          // Point Apple verification at the fetchMock-served test JWKS
+          // (test/apple.ts) instead of appleid.apple.com.
+          APPLE_JWKS_URL: "https://apple-jwks.test/keys",
+          APPLE_CLIENT_IDS: "com.effoff.test-ios,com.effoff.test-web",
         },
       },
     })),

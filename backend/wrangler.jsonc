@@ -7,6 +7,13 @@
   "observability": {
     "enabled": true,
   },
+  "vars": {
+    "APPLE_JWKS_URL": "https://appleid.apple.com/auth/keys",
+    // Comma-separated audiences accepted on Apple identity tokens: the iOS
+    // bundle id and the web Services ID. Placeholders until the clients
+    // register real identifiers with Apple.
+    "APPLE_CLIENT_IDS": "com.effoff.ios,com.effoff.web",
+  },
   "d1_databases": [
     {
       "binding": "DB",
