@@ -55,6 +55,27 @@ describe("POST /api/v1/trips", () => {
       });
     }
   });
+
+  it("400s non-object JSON bodies instead of 500ing", async () => {
+    const owner = await signInIos("apple-sub-trip-nullbody");
+    // `null`, arrays, and primitives all parse as JSON — they must be
+    // rejected as invalid_request, not throw in the handler.
+    for (const raw of ["null", "[]", '"Japan"', "7"]) {
+      const res = await app.request(
+        "/api/v1/trips",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${owner.token}` },
+          body: raw,
+        },
+        env,
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: { code: "invalid_request", message: expect.any(String) },
+      });
+    }
+  });
 });
 
 describe("GET /api/v1/trips", () => {
@@ -115,7 +136,9 @@ describe("GET /api/v1/trips/:id", () => {
       todos: { title: string; done: boolean }[];
     };
     expect(doc.trip.id).toBe(tripId);
-    expect(doc.members.map((m) => m.id).toSorted()).toEqual([owner.user.id, friend.user.id].toSorted());
+    expect(doc.members.map((m) => m.id).toSorted()).toEqual(
+      [owner.user.id, friend.user.id].toSorted(),
+    );
     // Presence window fields ride along on each member (null = whole trip).
     expect(doc.members[0]?.arrivalDate).toBe(null);
     expect(doc.cities).toEqual([expect.objectContaining({ id: city.id, position: 0 })]);

@@ -7,6 +7,7 @@ import { env } from "cloudflare:workers";
 import { sign } from "hono/jwt";
 import { vi } from "vitest";
 import app from "../src/index";
+import { req } from "./http";
 
 export const APPLE_ISSUER = "https://appleid.apple.com";
 // First entry of APPLE_CLIENT_IDS in vitest.config.ts.
@@ -115,15 +116,7 @@ export async function signInIos(
 
 // Creates a trip through the real API (#8) as the given signed-in user.
 export async function createTrip(token: string, name = "Test trip"): Promise<string> {
-  const res = await app.request(
-    "/api/v1/trips",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ name }),
-    },
-    env,
-  );
+  const res = await app.request("/api/v1/trips", req("POST", token, { name }), env);
   if (res.status !== 201) {
     throw new Error(`test trip creation failed with ${res.status}`);
   }

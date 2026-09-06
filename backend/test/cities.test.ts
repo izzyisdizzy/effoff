@@ -130,6 +130,18 @@ describe("PUT /api/v1/trips/:id/cities/order", () => {
     expect(cities.map((x) => x.position)).toEqual([0, 1, 2]);
   });
 
+  it("no-ops an empty reorder on a trip with no cities", async () => {
+    const owner = await signInIos("apple-sub-city-order-empty");
+    const tripId = await createTrip(owner.token);
+    const res = await app.request(
+      `/api/v1/trips/${tripId}/cities/order`,
+      req("PUT", owner.token, { cityIds: [] }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ cities: [] });
+  });
+
   it("400s anything that is not an exact permutation", async () => {
     const owner = await signInIos("apple-sub-city-order-bad");
     const tripId = await createTrip(owner.token);
@@ -150,6 +162,54 @@ describe("PUT /api/v1/trips/:id/cities/order", () => {
       );
       expect(res.status).toBe(400);
     }
+  });
+});
+
+describe("PATCH city timezone re-derivation", () => {
+  it("re-derives city-defaulted item instants; leaves explicit far-end zones alone", async () => {
+    const owner = await signInIos("apple-sub-city-tz-change");
+    const tripId = await createTrip(owner.token);
+    // Deliberately the wrong zone; the fix-up is the scenario under test.
+    const city = await addCity(tripId, owner.token, "Sapporo");
+
+    const itemRes = await app.request(
+      `/api/v1/trips/${tripId}/items`,
+      req("POST", owner.token, {
+        kind: "flight",
+        title: "JFK → CTS",
+        cityId: city.id,
+        startLocal: "2026-04-10T10:00",
+        startTz: "America/New_York",
+        endLocal: "2026-04-11T09:00", // defaults to the city's (wrong) zone
+      }),
+      env,
+    );
+    expect(itemRes.status).toBe(201);
+    const { item } = (await itemRes.json()) as {
+      item: { id: string; endTz: string; endUtc: string };
+    };
+    expect(item.endTz).toBe("Asia/Tokyo");
+
+    // Correct the city's zone: the city-derived end follows and its instant
+    // is re-derived; the explicit far end (New York) is untouched.
+    const res = await app.request(
+      `/api/v1/trips/${tripId}/cities/${city.id}`,
+      req("PATCH", owner.token, { timezone: "Asia/Seoul" }),
+      env,
+    );
+    expect(res.status).toBe(200);
+
+    const row = await env.DB.prepare(
+      "SELECT start_tz, start_utc, end_tz, end_utc FROM itinerary_items WHERE id = ?",
+    )
+      .bind(item.id)
+      .first<{ start_tz: string; start_utc: string; end_tz: string; end_utc: string }>();
+    expect(row).toEqual({
+      start_tz: "America/New_York",
+      start_utc: "2026-04-10T14:00:00.000Z", // EDT, unchanged
+      end_tz: "Asia/Seoul",
+      end_utc: "2026-04-11T00:00:00.000Z", // KST is UTC+9 (same offset, new zone)
+    });
   });
 });
 

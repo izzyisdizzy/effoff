@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { apiError } from "../api-error";
 import { requireSession, requireTripMember } from "../auth/middleware";
+import { MAX_NAME, readJsonObject } from "../validate";
 import {
   publicCity,
   publicItem,
@@ -18,14 +19,12 @@ import {
 const trips = new Hono<AppEnv>();
 
 trips.post("/trips", requireSession, async (c) => {
-  let body: { name?: unknown };
-  try {
-    body = await c.req.json();
-  } catch {
-    return apiError(c, 400, "invalid_request", "Request body must be JSON.");
+  const body: { name?: unknown } | null = await readJsonObject(c);
+  if (body === null) {
+    return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
   }
   const name = typeof body.name === "string" ? body.name.trim() : undefined;
-  if (name === undefined || name.length === 0) {
+  if (name === undefined || name.length === 0 || name.length > MAX_NAME) {
     return apiError(c, 400, "invalid_request", "Expected { name }.");
   }
   const now = new Date().toISOString();
@@ -91,14 +90,16 @@ trips.get("/trips/:id", requireSession, requireTripMember, async (c) => {
 
 trips.patch("/trips/:id", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("id");
-  let body: { name?: unknown };
-  try {
-    body = await c.req.json();
-  } catch {
-    return apiError(c, 400, "invalid_request", "Request body must be JSON.");
+  const body: { name?: unknown } | null = await readJsonObject(c);
+  if (body === null) {
+    return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
   }
   const name = typeof body.name === "string" ? body.name.trim() : undefined;
-  if ((body.name !== undefined && name === undefined) || name?.length === 0) {
+  if (
+    (body.name !== undefined && name === undefined) ||
+    name?.length === 0 ||
+    (name !== undefined && name.length > MAX_NAME)
+  ) {
     return apiError(c, 400, "invalid_request", "Expected { name? }.");
   }
   const existing = await c.env.DB.prepare("SELECT * FROM trips WHERE id = ?")

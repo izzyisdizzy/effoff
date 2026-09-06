@@ -92,8 +92,9 @@ function zoneOffsetMs(utcMs: number, timeZone: string): number {
 // treat the local time as UTC, read the zone's offset there, adjust, and read
 // once more so instants near a DST transition land on the offset actually in
 // force. A time inside the spring-forward gap resolves to a stable instant
-// within the skipped hour — good enough for a planner (nothing real is
-// scheduled at a time that doesn't exist).
+// just before the transition (it renders back as the pre-jump wall clock) —
+// good enough for a planner: nothing real is scheduled at a time that
+// doesn't exist.
 export function localToUtc(local: string, timeZone: string): string | null {
   const asIfUtc = parseLocalAsUtc(local);
   if (asIfUtc === null || !isValidTimeZone(timeZone)) {

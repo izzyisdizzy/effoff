@@ -68,7 +68,7 @@ describe("localToUtc", () => {
   it("resolves a nonexistent spring-forward wall-clock time to a real instant", () => {
     // 02:30 on 2026-03-08 never happens in New York; the derivation must
     // still return a stable instant at the boundary, not throw or drift.
-    // Guess-and-refine lands it 30 minutes into the skipped hour.
+    // Guess-and-refine lands it just before the jump (06:30Z = 01:30 EST).
     const derived = localToUtc("2026-03-08T02:30", "America/New_York");
     expect(derived).toBe("2026-03-08T06:30:00.000Z");
   });

@@ -3,6 +3,7 @@ import { apiError } from "../api-error";
 import { requireSession, requireTripMember } from "../auth/middleware";
 import { isLocalDateTime, isValidTimeZone } from "../time";
 import { publicTodo, type AppEnv, type TodoRow } from "../types";
+import { MAX_NAME, readJsonObject } from "../validate";
 
 const todos = new Hono<AppEnv>();
 
@@ -17,7 +18,9 @@ type TodoBody = {
 function shapeProblem(body: TodoBody): string | null {
   if (
     body.title !== undefined &&
-    (typeof body.title !== "string" || body.title.trim().length === 0)
+    (typeof body.title !== "string" ||
+      body.title.trim().length === 0 ||
+      body.title.length > MAX_NAME)
   ) {
     return "title must be a non-empty string.";
   }
@@ -63,11 +66,9 @@ async function isTripMember(db: D1Database, tripId: string, userId: string): Pro
 
 todos.post("/trips/:id/todos", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("id");
-  let body: TodoBody;
-  try {
-    body = await c.req.json();
-  } catch {
-    return apiError(c, 400, "invalid_request", "Request body must be JSON.");
+  const body: TodoBody | null = await readJsonObject(c);
+  if (body === null) {
+    return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
   }
   if (typeof body.title !== "string") {
     return apiError(
@@ -125,11 +126,9 @@ todos.post("/trips/:id/todos", requireSession, requireTripMember, async (c) => {
 todos.patch("/trips/:tripId/todos/:id", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("tripId");
   const todoId = c.req.param("id");
-  let body: TodoBody;
-  try {
-    body = await c.req.json();
-  } catch {
-    return apiError(c, 400, "invalid_request", "Request body must be JSON.");
+  const body: TodoBody | null = await readJsonObject(c);
+  if (body === null) {
+    return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
   }
   if (body.title === null || body.done === null) {
     return apiError(c, 400, "invalid_request", "title and done cannot be cleared.");

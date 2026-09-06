@@ -9,6 +9,17 @@ import {
   type ItemKind,
   type ItineraryItemRow,
 } from "../types";
+import {
+  isHttpUrl,
+  MAX_ADDRESS,
+  MAX_AIRPORT,
+  MAX_CONFIRMATION,
+  MAX_LINK,
+  MAX_LINKS,
+  MAX_NAME,
+  MAX_NOTES,
+  readJsonObject,
+} from "../validate";
 
 const items = new Hono<AppEnv>();
 
@@ -44,26 +55,34 @@ function shapeProblem(body: ItemBody): string | null {
   }
   if (
     body.title !== undefined &&
-    (typeof body.title !== "string" || body.title.trim().length === 0)
+    (typeof body.title !== "string" ||
+      body.title.trim().length === 0 ||
+      body.title.length > MAX_NAME)
   ) {
     return "title must be a non-empty string.";
   }
-  const nullableStrings = [
-    "cityId",
-    "notes",
-    "address",
-    "confirmationNumber",
-    "startLocal",
-    "startTz",
-    "endLocal",
-    "endTz",
-    "departureAirport",
-    "arrivalAirport",
-  ] as const;
-  for (const field of nullableStrings) {
+  // Free-text fields are length-capped so oversized values fail here as a
+  // 400 instead of inside D1 as a 500; format-validated fields are bounded
+  // by their formats.
+  const nullableStrings: [field: keyof ItemBody, maxLength: number][] = [
+    ["cityId", MAX_NAME],
+    ["notes", MAX_NOTES],
+    ["address", MAX_ADDRESS],
+    ["confirmationNumber", MAX_CONFIRMATION],
+    ["startLocal", MAX_NAME],
+    ["startTz", MAX_NAME],
+    ["endLocal", MAX_NAME],
+    ["endTz", MAX_NAME],
+    ["departureAirport", MAX_AIRPORT],
+    ["arrivalAirport", MAX_AIRPORT],
+  ];
+  for (const [field, maxLength] of nullableStrings) {
     const value = body[field];
     if (value !== undefined && value !== null && typeof value !== "string") {
       return EXPECTED_SHAPE;
+    }
+    if (typeof value === "string" && value.length > maxLength) {
+      return `${field} is too long (max ${maxLength} characters).`;
     }
   }
   if (body.position !== undefined && body.position !== null && !Number.isInteger(body.position)) {
@@ -76,9 +95,12 @@ function shapeProblem(body: ItemBody): string | null {
     ) {
       return "links must be an array of URL strings.";
     }
+    if (body.links.length > MAX_LINKS) {
+      return `links can hold at most ${MAX_LINKS} URLs.`;
+    }
     for (const link of body.links) {
-      if (!URL.canParse(link)) {
-        return `links contains an invalid URL: ${link}`;
+      if (link.length > MAX_LINK || !isHttpUrl(link)) {
+        return `links contains an invalid URL (http/https only): ${link.slice(0, 100)}`;
       }
     }
   }
@@ -86,15 +108,13 @@ function shapeProblem(body: ItemBody): string | null {
 }
 
 // Cross-field validation and UTC derivation over the *merged* row, so POST
-// and PATCH enforce identical invariants. Returns an error message or null;
-// mutates the draft's tz/utc columns as it resolves them.
-function finalizeItem(
-  draft: ItineraryItemRow,
-  cityTimezone: string | null,
-): { error: string } | { error: null } {
+// and PATCH enforce identical invariants. Returns an error message or null
+// like the other validators; mutates the draft's tz/utc columns as it
+// resolves them.
+function finalizeItem(draft: ItineraryItemRow, cityTimezone: string | null): string | null {
   if (draft.departure_airport !== null || draft.arrival_airport !== null) {
     if (draft.kind !== "flight") {
-      return { error: "departureAirport/arrivalAirport are only valid on a flight." };
+      return "departureAirport/arrivalAirport are only valid on a flight.";
     }
   }
   for (const end of ["start", "end"] as const) {
@@ -105,20 +125,16 @@ function finalizeItem(
       tz = null;
     } else {
       if (!isLocalDateTime(local)) {
-        return {
-          error: `${end}Local must be local wall-clock ISO 8601 (YYYY-MM-DDTHH:MM, no offset).`,
-        };
+        return `${end}Local must be local wall-clock ISO 8601 (YYYY-MM-DDTHH:MM, no offset).`;
       }
       // Resolve the zone: explicit wins, else the item's city, else fail —
       // a wall-clock time without a zone has no place on the timeline.
       tz ??= cityTimezone;
       if (tz === null) {
-        return {
-          error: `${end}Tz is required when ${end}Local is set on an item with no city.`,
-        };
+        return `${end}Tz is required when ${end}Local is set on an item with no city.`;
       }
       if (!isValidTimeZone(tz)) {
-        return { error: `${end}Tz must be a valid IANA zone (e.g. Asia/Tokyo).` };
+        return `${end}Tz must be a valid IANA zone (e.g. Asia/Tokyo).`;
       }
     }
     const utc = local === null || tz === null ? null : localToUtc(local, tz);
@@ -130,7 +146,7 @@ function finalizeItem(
       draft.end_utc = utc;
     }
   }
-  return { error: null };
+  return null;
 }
 
 async function cityTimezoneFor(
@@ -183,11 +199,9 @@ function bindItem(db: D1Database, sql: string, item: ItineraryItemRow): D1Prepar
 
 items.post("/trips/:id/items", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("id");
-  let body: ItemBody;
-  try {
-    body = await c.req.json();
-  } catch {
-    return apiError(c, 400, "invalid_request", "Request body must be JSON.");
+  const body: ItemBody | null = await readJsonObject(c);
+  if (body === null) {
+    return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
   }
   if (!isKind(body.kind) || typeof body.title !== "string") {
     return apiError(c, 400, "invalid_request", EXPECTED_SHAPE);
@@ -224,8 +238,8 @@ items.post("/trips/:id/items", requireSession, requireTripMember, async (c) => {
     return apiError(c, 400, "unknown_city", "cityId does not refer to a city on this trip.");
   }
   const finalized = finalizeItem(draft, city.timezone);
-  if (finalized.error !== null) {
-    return apiError(c, 400, "invalid_request", finalized.error);
+  if (finalized !== null) {
+    return apiError(c, 400, "invalid_request", finalized);
   }
   await bindItem(
     c.env.DB,
@@ -238,11 +252,9 @@ items.post("/trips/:id/items", requireSession, requireTripMember, async (c) => {
 items.patch("/trips/:tripId/items/:id", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("tripId");
   const itemId = c.req.param("id");
-  let body: ItemBody;
-  try {
-    body = await c.req.json();
-  } catch {
-    return apiError(c, 400, "invalid_request", "Request body must be JSON.");
+  const body: ItemBody | null = await readJsonObject(c);
+  if (body === null) {
+    return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
   }
   if (body.kind === null || body.title === null) {
     return apiError(c, 400, "invalid_request", "kind and title cannot be cleared.");
@@ -296,9 +308,31 @@ items.patch("/trips/:tripId/items/:id", requireSession, requireTripMember, async
   if (!city.found) {
     return apiError(c, 400, "unknown_city", "cityId does not refer to a city on this trip.");
   }
+  // Moving an item to a different city: an end whose stored zone equals the
+  // old city's zone was city-derived, so it follows the new city (unless
+  // this request sets that end's zone explicitly). Clearing it here lets
+  // finalizeItem re-resolve from the new city; per-end explicit zones (a
+  // flight's far end) don't match the old city's zone and stay put.
+  if (
+    body.cityId !== undefined &&
+    merged.city_id !== existing.city_id &&
+    existing.city_id !== null
+  ) {
+    const oldCity = await c.env.DB.prepare("SELECT timezone FROM trip_cities WHERE id = ?")
+      .bind(existing.city_id)
+      .first<{ timezone: string }>();
+    if (oldCity !== null && merged.city_id !== null) {
+      if (body.startTz === undefined && merged.start_tz === oldCity.timezone) {
+        merged.start_tz = null;
+      }
+      if (body.endTz === undefined && merged.end_tz === oldCity.timezone) {
+        merged.end_tz = null;
+      }
+    }
+  }
   const finalized = finalizeItem(merged, city.timezone);
-  if (finalized.error !== null) {
-    return apiError(c, 400, "invalid_request", finalized.error);
+  if (finalized !== null) {
+    return apiError(c, 400, "invalid_request", finalized);
   }
   await c.env.DB.prepare(
     "UPDATE itinerary_items SET city_id = ?, kind = ?, title = ?, notes = ?, address = ?, confirmation_number = ?, links = ?, start_local = ?, start_tz = ?, end_local = ?, end_tz = ?, start_utc = ?, end_utc = ?, departure_airport = ?, arrival_airport = ?, position = ?, updated_at = ? WHERE id = ? AND trip_id = ?",

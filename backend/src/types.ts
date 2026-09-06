@@ -170,6 +170,22 @@ export function publicCity(city: TripCityRow): {
   };
 }
 
+// One malformed row must not turn every trip-doc read into a 500, so the
+// stored JSON is parsed defensively down to an array of strings.
+function parseLinks(links: string | null): string[] {
+  if (links === null) {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(links);
+    return Array.isArray(parsed)
+      ? parsed.filter((link): link is string => typeof link === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export function publicItem(item: ItineraryItemRow): {
   id: string;
   cityId: string | null;
@@ -201,7 +217,7 @@ export function publicItem(item: ItineraryItemRow): {
     confirmationNumber: item.confirmation_number,
     // Stored as JSON text (schema: display-only array of URLs); an absent
     // column serializes as the empty list rather than null.
-    links: item.links === null ? [] : (JSON.parse(item.links) as string[]),
+    links: parseLinks(item.links),
     startLocal: item.start_local,
     startTz: item.start_tz,
     endLocal: item.end_local,

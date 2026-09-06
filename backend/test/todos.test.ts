@@ -107,6 +107,7 @@ describe("PATCH /api/v1/trips/:tripId/todos/:id", () => {
       req("POST", owner.token, { title: "Elsewhere" }),
       env,
     );
+    expect(created.status).toBe(201);
     const { todo } = (await created.json()) as { todo: { id: string } };
 
     const res = await app.request(
@@ -130,6 +131,7 @@ describe("DELETE /api/v1/trips/:tripId/todos/:id", () => {
       req("POST", owner.token, { title: "Doomed" }),
       env,
     );
+    expect(created.status).toBe(201);
     const { todo } = (await created.json()) as { todo: { id: string } };
 
     const first = await app.request(

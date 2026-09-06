@@ -77,14 +77,19 @@ generated RSA key and serves the matching JWKS from a stubbed `fetch`.
 
 The core planning surface (#8): trips, cities, itinerary items, to-dos. All
 REST JSON under `/api/v1`. Every route requires a session; every trip-scoped
-route (anything mentioning a `:tripId`) also requires trip membership — the
+route (any route under `/trips/:id`) also requires trip membership — the
 guards answer `401` (not signed in), `403` (`not_a_member`), or `404`
 (`trip_not_found`) before any handler runs. Non-2xx responses are always
-`{ "error": { "code", "message" } }`.
+`{ "error": { "code", "message" } }`; a request body that isn't a JSON
+object, or a field that fails validation, is a `400 invalid_request`.
 
+Successful responses wrap the resource in a named envelope — `{ trip }`,
+`{ trips }`, `{ city }`, `{ cities }`, `{ item }`, `{ todo }` (plus the trip
+doc's five keys below) — and every DELETE returns `200 { "ok": true }`.
 PATCH is partial update everywhere: an absent field is unchanged, an explicit
 `null` clears a nullable field. Responses are camelCase; every row carries
-`createdAt`/`updatedAt` (ISO 8601 UTC).
+`createdAt`/`updatedAt` (ISO 8601 UTC). Free-text fields are length-capped
+(`src/validate.ts`); names/titles max 300 chars.
 
 ### Trips
 
@@ -98,16 +103,20 @@ PATCH is partial update everywhere: an absent field is unchanged, an explicit
 
 ### Cities
 
-| Endpoint                           | Behavior                                                                                          |
-| :--------------------------------- | :------------------------------------------------------------------------------------------------ |
-| `POST /trips/:id/cities`           | `{ name, timezone, arrivalDate?, departureDate? }` → 201, appended at the end                     |
-| `PATCH /trips/:tripId/cities/:id`  | Name/timezone/dates — never position                                                              |
-| `PUT /trips/:id/cities/order`      | `{ cityIds }`, an exact permutation of the trip's city ids; positions rewritten 0..n‑1 atomically |
-| `DELETE /trips/:tripId/cities/:id` | The city's items survive with `cityId` nulled (and `updatedAt` bumped) in the same transaction    |
+| Endpoint                           | Behavior                                                                                                                              |
+| :--------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /trips/:id/cities`           | `{ name, timezone, arrivalDate?, departureDate? }` → 201, appended at the end                                                         |
+| `PATCH /trips/:tripId/cities/:id`  | Name/timezone/dates — never position                                                                                                  |
+| `PUT /trips/:id/cities/order`      | `{ cityIds }`, an exact permutation of the trip's city ids; positions rewritten 0..n‑1 atomically; returns the reordered `{ cities }` |
+| `DELETE /trips/:tripId/cities/:id` | The city's items survive with `cityId` nulled (and `updatedAt` bumped) in the same transaction                                        |
 
-`timezone` is a validated IANA zone and the default zone for times on items
-in that city. Dates are `YYYY-MM-DD` and nullable — an undated city is a real
-planning state.
+Unknown or cross-trip city ids are `404 city_not_found`. `timezone` is a
+validated IANA zone and the default zone for times on items in that city;
+**changing it re-derives the UTC instants of items whose zone came from the
+city** (an item end whose stored zone equals the city's previous zone follows
+the city — explicitly different zones, like a flight's far end, stay put).
+Dates are `YYYY-MM-DD` and nullable — an undated city is a real planning
+state.
 
 ### Itinerary items
 
@@ -120,7 +129,9 @@ planning state.
 Shape: `{ kind, title, cityId?, notes?, address?, confirmationNumber?,
 links?, startLocal?, startTz?, endLocal?, endTz?, departureAirport?,
 arrivalAirport?, position? }` with `kind ∈ flight | stay | reservation |
-activity`. Airports are flight-only. `links` is an array of URL strings.
+activity`. Airports are flight-only. `links` is an array of `http`/`https`
+URL strings (max 50). A `cityId` that isn't a city of the trip is a
+`400 unknown_city`.
 
 The time model (see foundation.md): `startLocal`/`endLocal` are local
 wall-clock ISO 8601 (`YYYY-MM-DDTHH:MM`, no offset) and are the source of
@@ -128,10 +139,12 @@ truth — they are stored and returned exactly as given, never shifted. Each
 end's zone resolves independently (flights depart and arrive in different
 zones): explicit `startTz`/`endTz` wins, else the item's city's `timezone`,
 else the request is a 400. `startUtc`/`endUtc` are derived on every write
-(`src/time.ts`) and exist only for ordering. Everything time/city/position is
-nullable — untimed, undated, cityless items are real planning states. A stay
-is one row (check-in = start, checkout = end); clients project it into two
-schedule entries.
+(`src/time.ts`) and exist only for ordering. Moving an item to a different
+city re-derives any end whose zone was city-derived (same rule as a city
+timezone change). Everything time/city/position is nullable — untimed,
+undated, cityless items are real planning states. A stay is one row
+(check-in = start, checkout = end); clients project it into two schedule
+entries.
 
 ### To-dos
 

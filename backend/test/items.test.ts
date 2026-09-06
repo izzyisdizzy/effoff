@@ -57,6 +57,23 @@ describe("POST /api/v1/trips/:id/items", () => {
       departureAirport: "LAX",
       arrivalAirport: "HND",
     });
+
+    // Same assertions against a real D1 read-back (the trip doc), not the
+    // in-memory object the POST response was built from: the *stored*
+    // wall-clock survives the round-trip unshifted.
+    const doc = await app.request(`/api/v1/trips/${tripId}`, req("GET", token), env);
+    expect(doc.status).toBe(200);
+    const { items: docItems } = (await doc.json()) as { items: Record<string, unknown>[] };
+    expect(docItems).toEqual([
+      expect.objectContaining({
+        startLocal: "2026-10-01T13:00",
+        startTz: "America/Los_Angeles",
+        endLocal: "2026-10-02T17:05",
+        endTz: "Asia/Tokyo",
+        startUtc: "2026-10-01T20:00:00.000Z",
+        endUtc: "2026-10-02T08:05:00.000Z",
+      }),
+    ]);
   });
 
   it("defaults a timed item's zone from its city", async () => {
@@ -119,6 +136,10 @@ describe("POST /api/v1/trips/:id/items", () => {
         "invalid_request",
       ],
       [{ kind: "activity", title: "Nope", links: ["not a url"] }, "invalid_request"],
+      // Web links only: scriptable/data schemes are rejected, not just junk.
+      [{ kind: "activity", title: "Nope", links: ["javascript:alert(1)"] }, "invalid_request"],
+      // Oversized free text fails validation as a 400, not inside D1 as a 500.
+      [{ kind: "activity", title: "x".repeat(301) }, "invalid_request"],
       [{ kind: "activity", title: "Nope", cityId: "not-a-city" }, "unknown_city"],
     ];
     for (const [body, code] of cases) {
@@ -167,6 +188,60 @@ describe("PATCH /api/v1/trips/:tripId/items/:id", () => {
     expect(clearedBody.item).toMatchObject({ startLocal: null, startTz: null, startUtc: null });
   });
 
+  it("re-derives a city-defaulted zone when the item moves to another city", async () => {
+    const { token, tripId, cityId: tokyoId } = await setup("apple-sub-item-move");
+    const parisRes = await app.request(
+      `/api/v1/trips/${tripId}/cities`,
+      req("POST", token, { name: "Paris", timezone: "Europe/Paris" }),
+      env,
+    );
+    expect(parisRes.status).toBe(201);
+    const { city: paris } = (await parisRes.json()) as { city: { id: string } };
+
+    const created = await app.request(
+      `/api/v1/trips/${tripId}/items`,
+      req("POST", token, {
+        kind: "activity",
+        title: "Museum",
+        cityId: tokyoId,
+        startLocal: "2026-04-10T09:00",
+      }),
+      env,
+    );
+    expect(created.status).toBe(201);
+    const { item } = (await created.json()) as { item: { id: string; startTz: string } };
+    expect(item.startTz).toBe("Asia/Tokyo");
+
+    // The zone came from the city, so it follows the item to the new city
+    // and the instant is re-derived; the wall-clock stays 09:00.
+    const moved = await app.request(
+      `/api/v1/trips/${tripId}/items/${item.id}`,
+      req("PATCH", token, { cityId: paris.id }),
+      env,
+    );
+    expect(moved.status).toBe(200);
+    const movedBody = (await moved.json()) as { item: Record<string, unknown> };
+    expect(movedBody.item).toMatchObject({
+      cityId: paris.id,
+      startLocal: "2026-04-10T09:00",
+      startTz: "Europe/Paris",
+      startUtc: "2026-04-10T07:00:00.000Z", // CEST is UTC+2 on that date
+    });
+
+    // An explicit zone sent alongside the move wins over the new city's.
+    const movedBack = await app.request(
+      `/api/v1/trips/${tripId}/items/${item.id}`,
+      req("PATCH", token, { cityId: tokyoId, startTz: "America/New_York" }),
+      env,
+    );
+    expect(movedBack.status).toBe(200);
+    const movedBackBody = (await movedBack.json()) as { item: Record<string, unknown> };
+    expect(movedBackBody.item).toMatchObject({
+      startTz: "America/New_York",
+      startUtc: "2026-04-10T13:00:00.000Z", // EDT is UTC-4 on that date
+    });
+  });
+
   it("404s cross-trip item ids", async () => {
     const { token, tripId } = await setup("apple-sub-item-cross");
     const other = await setup("apple-sub-item-cross-other");
@@ -175,6 +250,7 @@ describe("PATCH /api/v1/trips/:tripId/items/:id", () => {
       req("POST", other.token, { kind: "activity", title: "Elsewhere" }),
       env,
     );
+    expect(created.status).toBe(201);
     const { item } = (await created.json()) as { item: { id: string } };
 
     // A real item id, but under a trip it does not belong to.

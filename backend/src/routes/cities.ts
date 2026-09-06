@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { apiError } from "../api-error";
 import { requireSession, requireTripMember } from "../auth/middleware";
-import { isDateOnly, isValidTimeZone } from "../time";
-import { publicCity, type AppEnv, type TripCityRow } from "../types";
+import { isDateOnly, isValidTimeZone, localToUtc } from "../time";
+import { publicCity, type AppEnv, type ItineraryItemRow, type TripCityRow } from "../types";
+import { MAX_NAME, readJsonObject } from "../validate";
 
 const cities = new Hono<AppEnv>();
 
@@ -15,7 +16,10 @@ function fieldError(fields: {
   departureDate?: unknown;
 }): string | null {
   const { name, timezone, arrivalDate, departureDate } = fields;
-  if (name !== undefined && (typeof name !== "string" || name.trim().length === 0)) {
+  if (
+    name !== undefined &&
+    (typeof name !== "string" || name.trim().length === 0 || name.length > MAX_NAME)
+  ) {
     return "name must be a non-empty string.";
   }
   if (timezone !== undefined && (typeof timezone !== "string" || !isValidTimeZone(timezone))) {
@@ -38,11 +42,14 @@ function fieldError(fields: {
 
 cities.post("/trips/:id/cities", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("id");
-  let body: { name?: unknown; timezone?: unknown; arrivalDate?: unknown; departureDate?: unknown };
-  try {
-    body = await c.req.json();
-  } catch {
-    return apiError(c, 400, "invalid_request", "Request body must be JSON.");
+  const body: {
+    name?: unknown;
+    timezone?: unknown;
+    arrivalDate?: unknown;
+    departureDate?: unknown;
+  } | null = await readJsonObject(c);
+  if (body === null) {
+    return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
   }
   if (body.name === undefined || body.timezone === undefined) {
     return apiError(
@@ -99,11 +106,14 @@ cities.post("/trips/:id/cities", requireSession, requireTripMember, async (c) =>
 cities.patch("/trips/:tripId/cities/:id", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("tripId");
   const cityId = c.req.param("id");
-  let body: { name?: unknown; timezone?: unknown; arrivalDate?: unknown; departureDate?: unknown };
-  try {
-    body = await c.req.json();
-  } catch {
-    return apiError(c, 400, "invalid_request", "Request body must be JSON.");
+  const body: {
+    name?: unknown;
+    timezone?: unknown;
+    arrivalDate?: unknown;
+    departureDate?: unknown;
+  } | null = await readJsonObject(c);
+  if (body === null) {
+    return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
   }
   if (body.name === null || body.timezone === null) {
     return apiError(c, 400, "invalid_request", "name and timezone cannot be cleared.");
@@ -130,10 +140,10 @@ cities.patch("/trips/:tripId/cities/:id", requireSession, requireTripMember, asy
         : (body.departureDate as string | null),
     updated_at: new Date().toISOString(),
   };
-  await c.env.DB.prepare(
-    "UPDATE trip_cities SET name = ?, timezone = ?, arrival_date = ?, departure_date = ?, updated_at = ? WHERE id = ? AND trip_id = ?",
-  )
-    .bind(
+  const statements = [
+    c.env.DB.prepare(
+      "UPDATE trip_cities SET name = ?, timezone = ?, arrival_date = ?, departure_date = ?, updated_at = ? WHERE id = ? AND trip_id = ?",
+    ).bind(
       updated.name,
       updated.timezone,
       updated.arrival_date,
@@ -141,27 +151,62 @@ cities.patch("/trips/:tripId/cities/:id", requireSession, requireTripMember, asy
       updated.updated_at,
       cityId,
       tripId,
+    ),
+  ];
+  if (updated.timezone !== existing.timezone) {
+    // The city's zone is what item times default to, so correcting it must
+    // re-derive the affected items' UTC instants — otherwise the timeline
+    // keeps ordering on instants computed from the wrong zone. An end whose
+    // stored zone equals the city's previous zone is treated as city-derived
+    // and follows the city; an end with a different explicit zone (e.g. a
+    // flight's far end) is left alone. Wall-clock values never shift.
+    const { results: affected } = await c.env.DB.prepare(
+      "SELECT * FROM itinerary_items WHERE trip_id = ? AND city_id = ?",
     )
-    .run();
+      .bind(tripId, cityId)
+      .all<ItineraryItemRow>();
+    for (const item of affected) {
+      const startFollows = item.start_local !== null && item.start_tz === existing.timezone;
+      const endFollows = item.end_local !== null && item.end_tz === existing.timezone;
+      if (!startFollows && !endFollows) {
+        continue;
+      }
+      const startTz = startFollows ? updated.timezone : item.start_tz;
+      const endTz = endFollows ? updated.timezone : item.end_tz;
+      statements.push(
+        c.env.DB.prepare(
+          "UPDATE itinerary_items SET start_tz = ?, start_utc = ?, end_tz = ?, end_utc = ?, updated_at = ? WHERE id = ?",
+        ).bind(
+          startTz,
+          item.start_local === null || startTz === null
+            ? null
+            : localToUtc(item.start_local, startTz),
+          endTz,
+          item.end_local === null || endTz === null ? null : localToUtc(item.end_local, endTz),
+          updated.updated_at,
+          item.id,
+        ),
+      );
+    }
+  }
+  await c.env.DB.batch(statements);
   return c.json({ city: publicCity(updated) });
 });
 
 cities.put("/trips/:id/cities/order", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("id");
-  let body: { cityIds?: unknown };
-  try {
-    body = await c.req.json();
-  } catch {
-    return apiError(c, 400, "invalid_request", "Request body must be JSON.");
+  const body: { cityIds?: unknown } | null = await readJsonObject(c);
+  if (body === null) {
+    return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
   }
   const { cityIds } = body;
   if (!Array.isArray(cityIds) || !cityIds.every((id): id is string => typeof id === "string")) {
     return apiError(c, 400, "invalid_request", "Expected { cityIds: [cityId, ...] }.");
   }
-  const { results } = await c.env.DB.prepare("SELECT id FROM trip_cities WHERE trip_id = ?")
+  const { results } = await c.env.DB.prepare("SELECT * FROM trip_cities WHERE trip_id = ?")
     .bind(tripId)
-    .all<{ id: string }>();
-  const current = new Set(results.map((row) => row.id));
+    .all<TripCityRow>();
+  const current = new Map(results.map((row) => [row.id, row]));
   const submitted = new Set(cityIds);
   if (
     cityIds.length !== current.size ||
@@ -175,9 +220,16 @@ cities.put("/trips/:id/cities/order", requireSession, requireTripMember, async (
       "cityIds must be an exact permutation of the trip's city ids.",
     );
   }
+  // A cityless trip's only valid permutation is the empty one — a no-op,
+  // returned early because D1 rejects an empty batch.
+  if (cityIds.length === 0) {
+    return c.json({ cities: [] });
+  }
   const now = new Date().toISOString();
   // All positions rewritten 0..n-1 in one transaction, so a concurrent
-  // reorder resolves to one caller's complete ordering, never a blend.
+  // reorder resolves to one caller's complete ordering, never a blend. The
+  // response is built from this caller's ordering for the same reason — a
+  // re-query could observe a later writer.
   await c.env.DB.batch(
     cityIds.map((id, position) =>
       c.env.DB.prepare(
@@ -185,12 +237,11 @@ cities.put("/trips/:id/cities/order", requireSession, requireTripMember, async (
       ).bind(position, now, id, tripId),
     ),
   );
-  const reordered = await c.env.DB.prepare(
-    "SELECT * FROM trip_cities WHERE trip_id = ? ORDER BY position",
-  )
-    .bind(tripId)
-    .all<TripCityRow>();
-  return c.json({ cities: reordered.results.map(publicCity) });
+  const reordered = cityIds.map((id, position) =>
+    // The permutation check guarantees every id resolves.
+    publicCity({ ...(current.get(id) as TripCityRow), position, updated_at: now }),
+  );
+  return c.json({ cities: reordered });
 });
 
 cities.delete("/trips/:tripId/cities/:id", requireSession, requireTripMember, async (c) => {
