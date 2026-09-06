@@ -19,15 +19,20 @@
 -- the same batch, leaving the FK action as a backstop.
 --
 -- mime_type is what the Worker sniffed from the bytes (never the client's
--- declared type) and is what the object is served back as. filename is the
--- original upload name, kept for display and Content-Disposition only.
+-- declared type) and is what the object is served back as; the CHECK pins it
+-- to the sniffer's allowlist so no code path can persist a served type the
+-- sniffer would not have produced (adding a format is a migration, on
+-- purpose). filename is the original upload name, kept for display and
+-- Content-Disposition only.
 -- Trip deletion in app code removes the R2 objects before the rows cascade.
 CREATE TABLE attachments (
   id TEXT PRIMARY KEY,
   trip_id TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
   itinerary_item_id TEXT REFERENCES itinerary_items(id) ON DELETE SET NULL,
   r2_key TEXT NOT NULL UNIQUE,
-  mime_type TEXT NOT NULL,
+  mime_type TEXT NOT NULL CHECK (
+    mime_type IN ('image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf')
+  ),
   byte_size INTEGER NOT NULL CHECK (byte_size > 0),
   filename TEXT,
   uploaded_by TEXT NOT NULL REFERENCES users(id),

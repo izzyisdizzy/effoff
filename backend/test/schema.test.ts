@@ -211,6 +211,17 @@ describe("core schema (0002)", () => {
     expect(attachment?.itinerary_item_id).toBeNull();
   });
 
+  it("rejects an attachment mime type outside the sniffer's allowlist", async () => {
+    await seedTrip();
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO attachments (id, trip_id, r2_key, mime_type, byte_size, uploaded_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+        .bind("att-html", "trip-1", "trips/trip-1/att-html", "text/html", 10, "user-1", NOW, NOW)
+        .run(),
+    ).rejects.toThrow(/CHECK/i);
+  });
+
   it("rejects an attachment with a non-positive size or duplicate key", async () => {
     await seedTrip();
     await expect(

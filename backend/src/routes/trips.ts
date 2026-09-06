@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { apiError } from "../api-error";
+import { deleteObjects } from "../attachments/storage";
 import { requireSession, requireTripMember } from "../auth/middleware";
 import { MAX_NAME, readJsonObject } from "../validate";
-import { deleteObjects } from "../attachments/storage";
 import {
   publicAttachment,
   publicCity,

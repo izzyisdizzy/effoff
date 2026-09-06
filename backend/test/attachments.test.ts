@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
 import { MAX_ATTACHMENT_BYTES } from "../src/validate";
 import { activateAppleJwksMock, createTrip, signInIos } from "./apple";
-import { JPEG, PDF, PNG } from "./fixtures";
+import { GIF, JPEG, PDF, PNG, WEBP } from "./fixtures";
 import { multipart, req } from "./http";
 
 beforeAll(async () => {
@@ -45,6 +45,10 @@ async function upload(
   fd: FormData,
 ): Promise<{ status: number; body: { attachment?: Attachment; error?: { code: string } } }> {
   const res = await app.request(`/api/v1/trips/${tripId}/attachments`, multipart(token, fd), env);
+  // Let the clock move so a later mutation's updated_at is strictly greater
+  // than the upload's — otherwise both land in the same millisecond and a
+  // missing UPDATE ... updated_at would go unnoticed.
+  await new Promise((resolve) => setTimeout(resolve, 2));
   return { status: res.status, body: (await res.json()) as never };
 }
 
@@ -132,6 +136,18 @@ describe("POST /api/v1/trips/:id/attachments", () => {
     expect(lying.status).toBe(201);
     expect(lying.body.attachment?.mimeType).toBe("image/png");
 
+    // The remaining allowed types round-trip through the real upload path.
+    const webp = await upload(owner.token, tripId, form(WEBP, "sticker.webp", "image/webp"));
+    expect(webp.status).toBe(201);
+    expect(webp.body.attachment?.mimeType).toBe("image/webp");
+    const gif = await upload(
+      owner.token,
+      tripId,
+      form(GIF, "loop.gif", "application/octet-stream"),
+    );
+    expect(gif.status).toBe(201);
+    expect(gif.body.attachment?.mimeType).toBe("image/gif");
+
     const html = new TextEncoder().encode("<html><script>alert(1)</script></html>");
     const evil = await upload(owner.token, tripId, form(html, "ticket.png", "image/png"));
     expect(evil.status).toBe(400);
@@ -183,6 +199,62 @@ describe("POST /api/v1/trips/:id/attachments", () => {
     expect(await objectKeys(tripId)).toHaveLength(0);
   });
 
+  it("answers 503 and stores nothing when R2 rejects the write", async () => {
+    const owner = await signInIos("apple-sub-att-put-503");
+    const tripId = await createTrip(owner.token);
+    const spy = vi.spyOn(env.ATTACHMENTS, "put").mockRejectedValueOnce(new Error("r2 down"));
+    try {
+      const { status, body } = await upload(owner.token, tripId, form(PNG));
+      expect(status).toBe(503);
+      expect(body.error?.code).toBe("storage_unavailable");
+    } finally {
+      spy.mockRestore();
+    }
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM attachments WHERE trip_id = ?")
+      .bind(tripId)
+      .first<{ n: number }>();
+    expect(rows?.n).toBe(0);
+    expect(await objectKeys(tripId)).toHaveLength(0);
+  });
+
+  it("stores a safe basename and rejects a malformed Content-Length", async () => {
+    const owner = await signInIos("apple-sub-att-filename");
+    const tripId = await createTrip(owner.token);
+
+    const traversal = await upload(
+      owner.token,
+      tripId,
+      form(PNG, "../../etc/weird.png", "image/png"),
+    );
+    expect(traversal.status).toBe(201);
+    expect(traversal.body.attachment?.filename).toBe("weird.png");
+
+    const unnamed = await upload(owner.token, tripId, form(PNG, "."));
+    expect(unnamed.status).toBe(201);
+    expect(unnamed.body.attachment?.filename).toBeNull();
+    const res = await app.request(
+      `/api/v1/attachments/${unnamed.body.attachment!.id}`,
+      req("GET", owner.token),
+      env,
+    );
+    expect(res.headers.get("content-disposition")).toBe('inline; filename="attachment"');
+
+    const malformed = await app.request(
+      `/api/v1/trips/${tripId}/attachments`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${owner.token}`,
+          "content-type": "multipart/form-data; boundary=x",
+          "content-length": "lots",
+        },
+        body: "--x--",
+      },
+      env,
+    );
+    expect(malformed.status).toBe(400);
+  });
+
   it("guards membership like every other trip route", async () => {
     const owner = await signInIos("apple-sub-att-guard-owner");
     const outsider = await signInIos("apple-sub-att-guard-outsider");
@@ -198,6 +270,21 @@ describe("POST /api/v1/trips/:id/attachments", () => {
     const forbidden = await upload(outsider.token, tripId, form(PNG));
     expect(forbidden.status).toBe(403);
     expect(forbidden.body.error?.code).toBe("not_a_member");
+
+    // Every attachment route sits behind requireSession, including the
+    // trip-scoped mutations.
+    const someId = crypto.randomUUID();
+    for (const init of [
+      req("PATCH", undefined, { itineraryItemId: null }),
+      req("DELETE"),
+    ] as const) {
+      const anonMutation = await app.request(
+        `/api/v1/trips/${tripId}/attachments/${someId}`,
+        init,
+        env,
+      );
+      expect(anonMutation.status).toBe(401);
+    }
   });
 });
 
@@ -226,6 +313,29 @@ describe("GET /api/v1/attachments/:id", () => {
     );
     expect(cached.status).toBe(304);
     expect(cached.headers.get("etag")).toBe(etag);
+  });
+
+  it("ignores If-Match and 404s a row whose object is gone", async () => {
+    const owner = await signInIos("apple-sub-att-read-edge");
+    const tripId = await createTrip(owner.token);
+    const { body } = await upload(owner.token, tripId, form(PNG));
+    const id = body.attachment!.id;
+
+    // A failed If-Match must not masquerade as a 304 — it is simply ignored.
+    const ifMatch = await app.request(
+      `/api/v1/attachments/${id}`,
+      { headers: { authorization: `Bearer ${owner.token}`, "if-match": '"stale"' } },
+      env,
+    );
+    expect(ifMatch.status).toBe(200);
+    expect(ifMatch.headers.get("content-length")).toBe(String(PNG.byteLength));
+
+    await env.ATTACHMENTS.delete(`trips/${tripId}/${id}`);
+    const gone = await app.request(`/api/v1/attachments/${id}`, req("GET", owner.token), env);
+    expect(gone.status).toBe(404);
+    expect(await gone.json()).toEqual({
+      error: { code: "attachment_not_found", message: expect.any(String) },
+    });
   });
 
   it("401s anonymous, 403s non-members, 404s unknown ids", async () => {
@@ -274,7 +384,7 @@ describe("PATCH /api/v1/trips/:tripId/attachments/:id", () => {
     expect(set.status).toBe(200);
     const linked = ((await set.json()) as { attachment: Attachment }).attachment;
     expect(linked.itineraryItemId).toBe(itemId);
-    expect(linked.updatedAt >= attachment.updatedAt).toBe(true);
+    expect(linked.updatedAt > attachment.updatedAt).toBe(true);
 
     const foreign = await app.request(
       url,
@@ -297,6 +407,24 @@ describe("PATCH /api/v1/trips/:tripId/attachments/:id", () => {
     expect(cleared.status).toBe(200);
     expect(((await cleared.json()) as { attachment: Attachment }).attachment.itineraryItemId).toBe(
       null,
+    );
+  });
+
+  it("treats an absent field as unchanged, like every other PATCH", async () => {
+    const owner = await signInIos("apple-sub-att-patch-noop");
+    const tripId = await createTrip(owner.token);
+    const itemId = await createItem(owner.token, tripId);
+    const { body } = await upload(
+      owner.token,
+      tripId,
+      form(PNG, "t.png", "image/png", { itineraryItemId: itemId }),
+    );
+    const url = `/api/v1/trips/${tripId}/attachments/${body.attachment!.id}`;
+
+    const noop = await app.request(url, req("PATCH", owner.token, {}), env);
+    expect(noop.status).toBe(200);
+    expect(((await noop.json()) as { attachment: Attachment }).attachment.itineraryItemId).toBe(
+      itemId,
     );
   });
 
@@ -350,7 +478,7 @@ describe("item and trip deletion", () => {
     const { attachments } = (await doc.json()) as { attachments: Attachment[] };
     expect(attachments).toHaveLength(1);
     expect(attachments[0]).toMatchObject({ id: attachment.id, itineraryItemId: null });
-    expect(attachments[0]!.updatedAt >= attachment.updatedAt).toBe(true);
+    expect(attachments[0]!.updatedAt > attachment.updatedAt).toBe(true);
     expect(await objectKeys(tripId)).toHaveLength(1);
   });
 
@@ -391,6 +519,28 @@ describe("item and trip deletion", () => {
 });
 
 describe("DELETE /api/v1/trips/:tripId/attachments/:id", () => {
+  it("a storage failure leaves the row and object intact for a retry", async () => {
+    const owner = await signInIos("apple-sub-att-delete-503");
+    const tripId = await createTrip(owner.token);
+    const { body } = await upload(owner.token, tripId, form(PNG));
+    const id = body.attachment!.id;
+    const url = `/api/v1/trips/${tripId}/attachments/${id}`;
+    const spy = vi.spyOn(env.ATTACHMENTS, "delete").mockRejectedValueOnce(new Error("r2 down"));
+    try {
+      const failed = await app.request(url, req("DELETE", owner.token), env);
+      expect(failed.status).toBe(503);
+      expect(await failed.json()).toEqual({
+        error: { code: "storage_unavailable", message: expect.any(String) },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await objectKeys(tripId)).toHaveLength(1);
+    const retry = await app.request(url, req("DELETE", owner.token), env);
+    expect(retry.status).toBe(200);
+    expect(await objectKeys(tripId)).toHaveLength(0);
+  });
+
   it("removes the row and the object", async () => {
     const owner = await signInIos("apple-sub-att-delete");
     const tripId = await createTrip(owner.token);

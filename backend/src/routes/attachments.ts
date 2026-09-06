@@ -1,40 +1,17 @@
 import { Hono } from "hono";
 import { apiError } from "../api-error";
+import { dispositionFilename, sanitizeFilename } from "../attachments/filename";
 import { attachmentKey, deleteObjects } from "../attachments/storage";
 import { sniffMime } from "../attachments/sniff";
 import { isTripMember } from "../auth/membership";
 import { requireSession, requireTripMember } from "../auth/middleware";
 import { publicAttachment, type AppEnv, type AttachmentRow } from "../types";
-import { MAX_ATTACHMENT_BYTES, MAX_FILENAME, MAX_NAME, readJsonObject } from "../validate";
+import { MAX_ATTACHMENT_BYTES, MAX_NAME, readJsonObject } from "../validate";
 
 const attachments = new Hono<AppEnv>();
 
 const UPLOAD_SHAPE =
   "Expected multipart/form-data with a `file` part (image or PDF) and an optional `itineraryItemId` field.";
-
-// The original upload name is display-only, but it is echoed into
-// Content-Disposition, so reduce it to a plain basename: no path segments,
-// no control characters, capped. Empty after cleanup means "no name".
-function sanitizeFilename(raw: string): string | null {
-  // Multipart parsing percent-encodes the three characters a filename part
-  // cannot carry literally (WHATWG: `"` → %22, LF → %0A, CR → %0D); restore
-  // the quote and drop the line breaks so the stored name is the real one.
-  const decoded = raw.replace(/%22/g, '"').replace(/%0[AD]/gi, "");
-  const base = decoded.split(/[\\/]/).pop() ?? "";
-  // eslint-disable-next-line no-control-regex
-  const cleaned = base.replace(/[\u0000-\u001f\u007f]/g, "").trim();
-  if (cleaned.length === 0 || cleaned === "." || cleaned === "..") {
-    return null;
-  }
-  return cleaned.slice(0, MAX_FILENAME);
-}
-
-// Header-safe form of the stored name for Content-Disposition: printable
-// ASCII only, no quotes or backslashes (RFC 5987 encoding is a later nicety).
-function dispositionFilename(filename: string | null): string {
-  const ascii = (filename ?? "").replace(/["\\]/g, "").replace(/[^\x20-\x7e]/g, "_");
-  return ascii.length === 0 ? "attachment" : ascii;
-}
 
 async function itemBelongsToTrip(db: D1Database, tripId: string, itemId: string): Promise<boolean> {
   const row = await db
@@ -50,10 +27,15 @@ function isValidItemId(value: unknown): value is string {
 
 attachments.post("/trips/:id/attachments", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("id");
-  // Content-Length is advisory (chunked bodies omit it), but when present it
-  // lets an oversized upload fail before the Worker buffers any of it.
-  const declaredLength = Number(c.req.header("Content-Length") ?? "0");
-  if (declaredLength > MAX_ATTACHMENT_BYTES) {
+  // Content-Length is advisory — a chunked body omits it and formData() below
+  // buffers whatever arrives, bounded only by the platform request limit —
+  // but when present it lets an oversized upload fail before any buffering.
+  // A malformed value is rejected rather than silently skipping the guard.
+  const declaredHeader = c.req.header("Content-Length");
+  if (declaredHeader !== undefined && !/^\d+$/.test(declaredHeader)) {
+    return apiError(c, 400, "invalid_request", "Content-Length must be a non-negative integer.");
+  }
+  if (declaredHeader !== undefined && Number(declaredHeader) > MAX_ATTACHMENT_BYTES) {
     return apiError(
       c,
       413,
@@ -125,7 +107,12 @@ attachments.post("/trips/:id/attachments", requireSession, requireTripMember, as
   row.r2_key = attachmentKey(tripId, row.id);
   // Bytes first, then the row: a row must never point at an object that was
   // not written. If the insert fails, drop the object so nothing is orphaned.
-  await c.env.ATTACHMENTS.put(row.r2_key, bytes, { httpMetadata: { contentType: mime } });
+  try {
+    await c.env.ATTACHMENTS.put(row.r2_key, bytes, { httpMetadata: { contentType: mime } });
+  } catch (error) {
+    console.error("attachment_r2_put_failed", error);
+    return apiError(c, 503, "storage_unavailable", "Could not store the attachment.");
+  }
   try {
     await c.env.DB.prepare(
       "INSERT INTO attachments (id, trip_id, itinerary_item_id, r2_key, mime_type, byte_size, filename, uploaded_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -166,25 +153,40 @@ attachments.get("/attachments/:id", requireSession, async (c) => {
   if (!(await isTripMember(c.env.DB, row.trip_id, c.get("user").id))) {
     return apiError(c, 403, "not_a_member", "You are not a member of this trip.");
   }
-  // onlyIf with the request headers makes R2 evaluate If-None-Match etc.;
-  // a failed precondition comes back as a body-less R2Object.
-  const object = await c.env.ATTACHMENTS.get(row.r2_key, { onlyIf: c.req.raw.headers });
+  // Only the cache-revalidation preconditions are forwarded to R2: when one
+  // of them holds, R2 returns a body-less R2Object, which is the 304.
+  // Forwarding every conditional header would turn a failed If-Match /
+  // If-Unmodified-Since into a bogus 304 where HTTP wants 412, so those are
+  // ignored (nothing sends them for an immutable image).
+  const onlyIf = new Headers();
+  const ifNoneMatch = c.req.header("If-None-Match");
+  const ifModifiedSince = c.req.header("If-Modified-Since");
+  if (ifNoneMatch !== undefined) {
+    onlyIf.set("If-None-Match", ifNoneMatch);
+  } else if (ifModifiedSince !== undefined) {
+    onlyIf.set("If-Modified-Since", ifModifiedSince);
+  }
+  const object = await c.env.ATTACHMENTS.get(row.r2_key, { onlyIf });
   if (object === null) {
     // Only a failed delete sequence can produce a row without its object.
     console.error("attachment_object_missing", { id: row.id, key: row.r2_key });
     return apiError(c, 404, "attachment_not_found", "Attachment not found.");
   }
+  // 304 carries only what the cache needs to revalidate.
   const headers = new Headers({
-    "Content-Type": row.mime_type,
     ETag: object.httpEtag,
     "Cache-Control": "private, max-age=3600",
-    "X-Content-Type-Options": "nosniff",
-    "Content-Disposition": `inline; filename="${dispositionFilename(row.filename)}"`,
   });
   if (!("body" in object)) {
     return new Response(null, { status: 304, headers });
   }
-  headers.set("Content-Length", String(row.byte_size));
+  // Content-Type is the sniffed type from the row (the authority), while the
+  // length comes from the object itself so it can never disagree with the
+  // stream that follows.
+  headers.set("Content-Type", row.mime_type);
+  headers.set("Content-Length", String(object.size));
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Content-Disposition", `inline; filename="${dispositionFilename(row.filename)}"`);
   return new Response(object.body, { status: 200, headers });
 });
 
@@ -201,9 +203,11 @@ attachments.patch(
     if (body === null) {
       return apiError(c, 400, "invalid_request", "Request body must be a JSON object.");
     }
+    // Partial update like every other PATCH: an absent field is unchanged
+    // (so `{}` is a no-op), an explicit null clears the link.
     const itemId = body.itineraryItemId;
-    if (itemId !== null && !isValidItemId(itemId)) {
-      return apiError(c, 400, "invalid_request", "Expected { itineraryItemId: string | null }.");
+    if (itemId !== undefined && itemId !== null && !isValidItemId(itemId)) {
+      return apiError(c, 400, "invalid_request", "Expected { itineraryItemId?: string | null }.");
     }
     const existing = await c.env.DB.prepare(
       "SELECT * FROM attachments WHERE id = ? AND trip_id = ?",
@@ -213,7 +217,12 @@ attachments.patch(
     if (existing === null) {
       return apiError(c, 404, "attachment_not_found", "Attachment not found on this trip.");
     }
-    if (itemId !== null && !(await itemBelongsToTrip(c.env.DB, tripId, itemId))) {
+    if (
+      itemId !== undefined &&
+      itemId !== null &&
+      itemId !== existing.itinerary_item_id &&
+      !(await itemBelongsToTrip(c.env.DB, tripId, itemId))
+    ) {
       return apiError(
         c,
         400,
@@ -223,7 +232,7 @@ attachments.patch(
     }
     const updated: AttachmentRow = {
       ...existing,
-      itinerary_item_id: itemId,
+      itinerary_item_id: itemId === undefined ? existing.itinerary_item_id : itemId,
       updated_at: new Date().toISOString(),
     };
     await c.env.DB.prepare(

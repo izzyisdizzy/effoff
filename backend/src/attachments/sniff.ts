@@ -13,9 +13,6 @@ export const ATTACHMENT_MIMES = [
 ] as const;
 export type AttachmentMime = (typeof ATTACHMENT_MIMES)[number];
 
-// Longest signature we inspect: RIFF....WEBP needs 12 bytes.
-export const SNIFF_BYTES = 12;
-
 function startsWith(bytes: Uint8Array, signature: number[], offset = 0): boolean {
   if (bytes.length < offset + signature.length) {
     return false;

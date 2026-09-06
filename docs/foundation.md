@@ -74,7 +74,7 @@ R2 for bytes, D1 for metadata: id, trip_id, optional itinerary_item_id, R2
 key, mime type, byte size, uploaded_by, created_at. Images and PDFs. All
 access goes through the Worker (auth check → stream from R2); no public
 bucket, no signed URLs in v1. **Decided (#16):** the item link is set after
-upload via `PATCH /trips/:id/attachments/:id` (booking capture uploads before
+upload via `PATCH /trips/:tripId/attachments/:id` (booking capture uploads before
 the item exists), attachments can be deleted, deleting an item unlinks rather
 than deletes its attachments, and the stored MIME type is sniffed from the
 bytes — see `backend/README.md` (Attachments).
@@ -151,6 +151,8 @@ POST   /trips/:id/invites              POST /invites/:token/accept
 CRUD   /trips/:id/cities, /items, /todos, /map-lists, /places
 POST   /trips/:id/attachments  (multipart upload → R2)
 GET    /attachments/:id        (auth-checked stream from R2)
+PATCH  /trips/:tripId/attachments/:id   (set/clear the itinerary item link)
+DELETE /trips/:tripId/attachments/:id
 POST   /trips/:id/extract      (Phase 2: image/PDF → draft itinerary item)
 ```
 
