@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../src/index";
-import { activateAppleJwksMock, seedTrip, signInIos } from "./apple";
+import { activateAppleJwksMock, createTrip, signInIos } from "./apple";
 
 beforeAll(async () => {
   await activateAppleJwksMock();
@@ -28,7 +28,7 @@ async function mintInvite(tripId: string, token: string): Promise<string> {
 describe("POST /api/v1/trips/:id/invites", () => {
   it("lets a member mint an invite", async () => {
     const owner = await signInIos("apple-sub-owner-mint");
-    const tripId = await seedTrip(owner.user.id);
+    const tripId = await createTrip(owner.token);
 
     const res = await app.request(`/api/v1/trips/${tripId}/invites`, post(owner.token), env);
     expect(res.status).toBe(201);
@@ -46,7 +46,7 @@ describe("POST /api/v1/trips/:id/invites", () => {
   it("403s a signed-in non-member and 401s an unauthenticated caller", async () => {
     const owner = await signInIos("apple-sub-owner-guard");
     const outsider = await signInIos("apple-sub-outsider-guard");
-    const tripId = await seedTrip(owner.user.id);
+    const tripId = await createTrip(owner.token);
 
     const forbidden = await app.request(
       `/api/v1/trips/${tripId}/invites`,
@@ -73,7 +73,7 @@ describe("POST /api/v1/invites/:token/accept", () => {
   it("adds the accepting user as a member, idempotently", async () => {
     const owner = await signInIos("apple-sub-owner-accept");
     const joiner = await signInIos("apple-sub-joiner");
-    const tripId = await seedTrip(owner.user.id);
+    const tripId = await createTrip(owner.token);
     const invite = await mintInvite(tripId, owner.token);
 
     const first = await app.request(`/api/v1/invites/${invite}/accept`, post(joiner.token), env);
@@ -136,7 +136,7 @@ describe("POST /api/v1/invites/:token/accept", () => {
   ])("410s an %s invite", async (label, state, code) => {
     const owner = await signInIos(`apple-sub-owner-${label}`);
     const joiner = await signInIos(`apple-sub-joiner-${label}`);
-    const tripId = await seedTrip(owner.user.id);
+    const tripId = await createTrip(owner.token);
     const token = `${label}-invite-token`;
     await env.DB.prepare(
       "INSERT INTO invites (token, trip_id, created_by, created_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?)",

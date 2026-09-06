@@ -113,17 +113,20 @@ export async function signInIos(
   return (await res.json()) as { token: string; user: PublicUser };
 }
 
-// Direct D1 seed: trip CRUD is #8, so tests create trips underneath the API.
-export async function seedTrip(ownerId: string): Promise<string> {
-  const tripId = crypto.randomUUID();
-  const now = new Date().toISOString();
-  await env.DB.batch([
-    env.DB.prepare(
-      "INSERT INTO trips (id, name, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-    ).bind(tripId, "Test trip", ownerId, now, now),
-    env.DB.prepare(
-      "INSERT INTO trip_members (trip_id, user_id, created_at, updated_at) VALUES (?, ?, ?, ?)",
-    ).bind(tripId, ownerId, now, now),
-  ]);
-  return tripId;
+// Creates a trip through the real API (#8) as the given signed-in user.
+export async function createTrip(token: string, name = "Test trip"): Promise<string> {
+  const res = await app.request(
+    "/api/v1/trips",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ name }),
+    },
+    env,
+  );
+  if (res.status !== 201) {
+    throw new Error(`test trip creation failed with ${res.status}`);
+  }
+  const body = (await res.json()) as { trip: { id: string } };
+  return body.trip.id;
 }
