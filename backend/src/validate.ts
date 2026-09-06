@@ -40,3 +40,9 @@ export const MAX_CONFIRMATION = 200;
 export const MAX_AIRPORT = 10;
 export const MAX_LINK = 2_000;
 export const MAX_LINKS = 50;
+
+// Attachment uploads are buffered in the Worker (the type sniff needs the
+// bytes), so the cap is also the memory bound per request. 20 MB covers
+// phone photos and multi-page PDF confirmations with room to spare.
+export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const MAX_FILENAME = 255;

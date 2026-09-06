@@ -10,7 +10,8 @@ lives in [`../docs/foundation.md`](../docs/foundation.md).
 src/index.ts        Worker entry — Hono app, routes mounted under /api
 migrations/         D1 migrations (wrangler d1 migrations)
 test/               Vitest suite, runs inside workerd with a real local D1
-wrangler.jsonc      Worker + D1 binding config (binding: DB, db: effoff-db)
+wrangler.jsonc      Worker + D1 (binding: DB, db: effoff-db) + R2 (binding: ATTACHMENTS,
+                    bucket: effoff-attachments) config
 ```
 
 ## Commands
@@ -25,7 +26,7 @@ All run from `backend/`. Requires Node + npm; `npm install` first.
 | `npm run lint`       | oxlint                                                                                          |
 | `npm run format`     | oxfmt (in place; `npx oxfmt --check` to verify only)                                            |
 | `npm run migrate`    | Apply migrations to the **local** D1 (`--remote` variant below for prod)                        |
-| `npm run deploy`     | Deploy the Worker to Cloudflare (needs `wrangler login`)                                        |
+| `npm run deploy`     | Deploy the Worker to Cloudflare (needs `wrangler login`; see Deploying below)                   |
 | `npm run cf-typegen` | Regenerate `worker-configuration.d.ts` after `wrangler.jsonc` changes                           |
 
 ## Migrations
@@ -38,6 +39,21 @@ npx wrangler d1 migrations apply effoff-db --remote  # apply to production
 
 Tests apply all migrations to a fresh in-memory D1 automatically
 (`test/apply-migrations.ts`, wired up in `vitest.config.ts`).
+
+## Deploying
+
+The R2 bucket is not created by `wrangler deploy` — it must exist (and R2
+must be enabled on the account) before the first deploy that carries the
+attachments binding:
+
+```sh
+npx wrangler r2 bucket create effoff-attachments   # once, per account
+npx wrangler d1 migrations apply effoff-db --remote
+npm run deploy
+```
+
+Local dev and tests need neither: wrangler and the Vitest pool serve the D1
+and R2 bindings locally from `wrangler.jsonc`.
 
 ## Health check
 
@@ -93,13 +109,13 @@ PATCH is partial update everywhere: an absent field is unchanged, an explicit
 
 ### Trips
 
-| Endpoint            | Behavior                                                                                                                       |
-| :------------------ | :----------------------------------------------------------------------------------------------------------------------------- |
-| `POST /trips`       | `{ name }` → 201. Creates the trip and the creator's membership in one transaction                                             |
-| `GET /trips`        | The caller's trips (summary shape)                                                                                             |
-| `GET /trips/:id`    | The full trip doc in one response: `trip`, `members` (public user + presence window), `cities` (by position), `items`, `todos` |
-| `PATCH /trips/:id`  | `{ name? }`                                                                                                                    |
-| `DELETE /trips/:id` | Creator only (`403 not_trip_creator` for other members); children cascade                                                      |
+| Endpoint            | Behavior                                                                                                                                                                   |
+| :------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /trips`       | `{ name }` → 201. Creates the trip and the creator's membership in one transaction                                                                                         |
+| `GET /trips`        | The caller's trips (summary shape)                                                                                                                                         |
+| `GET /trips/:id`    | The full trip doc in one response: `trip`, `members` (public user + presence window), `cities` (by position), `items`, `todos`, `attachments` (metadata)                   |
+| `PATCH /trips/:id`  | `{ name? }`                                                                                                                                                                |
+| `DELETE /trips/:id` | Creator only (`403 not_trip_creator` for other members); the trip's R2 objects are removed first (`503 storage_unavailable` leaves the trip intact), then children cascade |
 
 ### Cities
 
@@ -157,6 +173,43 @@ entries.
 `assigneeUserId` must be a member of the trip (`400 not_a_trip_member`). A
 due time needs its zone (`dueTz`) — to-dos have no city to default from, and
 no derived UTC (they are not ordered on a timeline).
+
+### Attachments
+
+Ticket / confirmation images and PDFs (#16): bytes in R2 (binding
+`ATTACHMENTS`, key `trips/<tripId>/<attachmentId>`), metadata in the
+`attachments` table. Every read goes through the Worker's membership check —
+there is no public bucket and no signed URL.
+
+| Endpoint                                | Behavior                                                                                                                                                                       |
+| :-------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /trips/:id/attachments`           | `multipart/form-data` with a `file` part and an optional `itineraryItemId` text field → `201 { attachment }`; `503 storage_unavailable` if R2 rejects the write                |
+| `GET /attachments/:id`                  | Streams the bytes (`Content-Type` from the stored sniffed type, `ETag`, `Cache-Control: private, max-age=3600`, `nosniff`, inline disposition); `If-None-Match` → 304          |
+| `PATCH /trips/:tripId/attachments/:id`  | `{ itineraryItemId?: string \| null }` — the only mutable field (absent = unchanged, `null` clears); set after the fact because booking capture uploads before the item exists |
+| `DELETE /trips/:tripId/attachments/:id` | Removes the R2 object, then the row (`503 storage_unavailable` on an R2 failure leaves both in place)                                                                          |
+
+Attachment shape: `{ id, itineraryItemId, mimeType, byteSize, filename,
+uploadedBy, createdAt, updatedAt }`. Clients build the stream URL from the
+id.
+
+- **The type comes from the bytes**, never from the client's declared
+  `Content-Type` (`src/attachments/sniff.ts`): JPEG, PNG, WebP, GIF, and PDF
+  are accepted; anything else — including a mislabeled HTML file — is
+  `400 unsupported_type`. The schema pins `mime_type` to the same allowlist
+  with a CHECK, so adding a format is a code change plus a migration. HEIC is deliberately unsupported (the Claude API
+  used by Phase 2 extraction can't read it); the iOS app transcodes to JPEG
+  before upload.
+- Uploads are capped at 20 MB (`413 too_large`); an empty file is a 400.
+- `itineraryItemId` must be an item on the same trip (`400 unknown_item`).
+- `GET /attachments/:id` is not trip-scoped in the URL, so the trip comes
+  from the row: unknown id → `404 attachment_not_found`, signed-in
+  non-member → `403 not_a_member` (same as `requireTripMember`).
+- **Deleting an itinerary item unlinks its attachments** (`itineraryItemId`
+  nulled, `updatedAt` bumped, in the same transaction) — the booking is the
+  source, so the ticket outlives the item. Deleting the trip deletes them.
+- Write order is R2 then D1 on upload (a failed insert deletes the object)
+  and R2 then D1 on delete, so a failure never leaves a paid-for orphan
+  object; the worst case is a row whose object is gone, which reads as 404.
 
 There is deliberately no trip-lifecycle validation anywhere above: every
 mutation behaves identically before, during, and after a trip

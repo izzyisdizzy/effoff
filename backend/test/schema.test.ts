@@ -11,6 +11,7 @@ const NOW = "2026-09-05T12:00:00Z";
 // empty schema (children before parents to satisfy FKs).
 beforeEach(async () => {
   for (const table of [
+    "attachments",
     "todos",
     "itinerary_items",
     "trip_cities",
@@ -91,6 +92,21 @@ async function seedTrip() {
     env.DB.prepare(
       "INSERT INTO todos (id, trip_id, title, done, assignee_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
     ).bind("todo-1", "trip-1", "Book rail passes", 0, "user-1", NOW, NOW),
+    // The stay's confirmation PDF (0004): metadata row for an R2 object.
+    env.DB.prepare(
+      "INSERT INTO attachments (id, trip_id, itinerary_item_id, r2_key, mime_type, byte_size, filename, uploaded_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).bind(
+      "att-1",
+      "trip-1",
+      "item-stay",
+      "trips/trip-1/att-1",
+      "application/pdf",
+      1234,
+      "confirmation.pdf",
+      "user-1",
+      NOW,
+      NOW,
+    ),
   ]);
 }
 
@@ -182,6 +198,48 @@ describe("core schema (0002)", () => {
     expect(stay?.city_id).toBeNull();
   });
 
+  it("deleting an item keeps its attachments (itinerary_item_id set to NULL)", async () => {
+    await seedTrip();
+    await env.DB.prepare("DELETE FROM itinerary_items WHERE id = ?").bind("item-stay").run();
+
+    const attachment = await env.DB.prepare(
+      "SELECT itinerary_item_id FROM attachments WHERE id = ?",
+    )
+      .bind("att-1")
+      .first<{ itinerary_item_id: string | null }>();
+    expect(attachment).not.toBeNull();
+    expect(attachment?.itinerary_item_id).toBeNull();
+  });
+
+  it("rejects an attachment mime type outside the sniffer's allowlist", async () => {
+    await seedTrip();
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO attachments (id, trip_id, r2_key, mime_type, byte_size, uploaded_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+        .bind("att-html", "trip-1", "trips/trip-1/att-html", "text/html", 10, "user-1", NOW, NOW)
+        .run(),
+    ).rejects.toThrow(/CHECK/i);
+  });
+
+  it("rejects an attachment with a non-positive size or duplicate key", async () => {
+    await seedTrip();
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO attachments (id, trip_id, r2_key, mime_type, byte_size, uploaded_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+        .bind("att-empty", "trip-1", "trips/trip-1/att-empty", "image/png", 0, "user-1", NOW, NOW)
+        .run(),
+    ).rejects.toThrow(/CHECK/i);
+    await expect(
+      env.DB.prepare(
+        "INSERT INTO attachments (id, trip_id, r2_key, mime_type, byte_size, uploaded_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+        .bind("att-dup", "trip-1", "trips/trip-1/att-1", "image/png", 10, "user-1", NOW, NOW)
+        .run(),
+    ).rejects.toThrow(/UNIQUE/i);
+  });
+
   it("deleting a trip cascades all trip-scoped rows but keeps users", async () => {
     await seedTrip();
     await env.DB.prepare("DELETE FROM trips WHERE id = ?").bind("trip-1").run();
@@ -191,6 +249,7 @@ describe("core schema (0002)", () => {
     expect(await count("trip_cities")).toBe(0);
     expect(await count("itinerary_items")).toBe(0);
     expect(await count("todos")).toBe(0);
+    expect(await count("attachments")).toBe(0);
     expect(await count("users")).toBe(1);
   });
 });

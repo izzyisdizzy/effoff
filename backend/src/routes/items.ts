@@ -365,10 +365,21 @@ items.patch("/trips/:tripId/items/:id", requireSession, requireTripMember, async
 items.delete("/trips/:tripId/items/:id", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("tripId");
   const itemId = c.req.param("id");
-  const result = await c.env.DB.prepare("DELETE FROM itinerary_items WHERE id = ? AND trip_id = ?")
-    .bind(itemId, tripId)
-    .run();
-  if (result.meta.changes === 0) {
+  // Unlink the item's attachments in app code, before the delete and in the
+  // same transaction — the ticket outlives the item (the booking is the
+  // source). The FK's ON DELETE SET NULL is only a backstop and would not
+  // bump updated_at (0004_attachments; same precedent as city deletion).
+  const now = new Date().toISOString();
+  const [, deleted] = await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE attachments SET itinerary_item_id = NULL, updated_at = ? WHERE trip_id = ? AND itinerary_item_id = ?",
+    ).bind(now, tripId, itemId),
+    c.env.DB.prepare("DELETE FROM itinerary_items WHERE id = ? AND trip_id = ?").bind(
+      itemId,
+      tripId,
+    ),
+  ]);
+  if (deleted === undefined || deleted.meta.changes === 0) {
     return apiError(c, 404, "item_not_found", "Itinerary item not found on this trip.");
   }
   return c.json({ ok: true });

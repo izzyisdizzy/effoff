@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { apiError } from "./api-error";
+import attachments from "./routes/attachments";
 import auth from "./routes/auth";
 import cities from "./routes/cities";
 import invites from "./routes/invites";
@@ -36,6 +37,7 @@ v1.route("/", trips);
 v1.route("/", cities);
 v1.route("/", items);
 v1.route("/", todos);
+v1.route("/", attachments);
 app.route("/v1", v1);
 
 // Keep the { error: { code, message } } contract on the paths Hono would
