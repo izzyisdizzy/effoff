@@ -90,6 +90,14 @@ bytes — see `backend/README.md` (Attachments).
   the same for all three, so this doesn't block Phase 1.
 - `place_tags` — (place_id, tag), lowercase, free-form. `place_links` —
   (place_id, url, label) for Tabelog / a friend's rec / a review.
+- **Decided (#17):** tags and links are declarative sets on the place body
+  (send them to replace, omit to leave alone, `[]` to clear) rather than
+  sub-resources; `places.city_id` is nullable and SET NULL so dropping a city
+  never discards a member's decoration; `google_maps_url` is unique per trip
+  (`409 place_exists`) so a re-import can't double up, while URL-less
+  hand-added places stay unconstrained; and `source_list` is free text, not an
+  FK, until `map_lists` is reconciled with #14. See `backend/README.md`
+  (Places). The import path remains open and unbuilt.
 
 ### User, TripMember, Invite
 

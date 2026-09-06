@@ -41,6 +41,16 @@ export const MAX_AIRPORT = 10;
 export const MAX_LINK = 2_000;
 export const MAX_LINKS = 50;
 
+// Place tags are one-word decorations ("ramen", "casual", "shoes"); a place
+// with more than a couple dozen of them is writing a note, not tagging. The
+// pair bounds a place's tag rows at ~1 KB.
+export const MAX_TAG = 50;
+export const MAX_TAGS = 25;
+// A place link's display label ("Tabelog", "Marie's rec"). Link URLs reuse
+// MAX_LINK and the per-place count reuses MAX_LINKS — same knob as itinerary
+// item links, so there is one answer to "how many links may a thing have".
+export const MAX_LABEL = 100;
+
 // Attachment uploads are buffered in the Worker (the type sniff needs the
 // bytes), so the cap is also the memory bound per request. 20 MB covers
 // phone photos and multi-page PDF confirmations with room to spare.

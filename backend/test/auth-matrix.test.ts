@@ -33,6 +33,9 @@ const ROUTES: [method: string, path: (tripId: string) => string][] = [
   ["POST", (t) => `/api/v1/trips/${t}/todos`],
   ["PATCH", (t) => `/api/v1/trips/${t}/todos/some-todo`],
   ["DELETE", (t) => `/api/v1/trips/${t}/todos/some-todo`],
+  ["POST", (t) => `/api/v1/trips/${t}/places`],
+  ["PATCH", (t) => `/api/v1/trips/${t}/places/some-place`],
+  ["DELETE", (t) => `/api/v1/trips/${t}/places/some-place`],
 ];
 
 let tripId: string;
