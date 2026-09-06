@@ -1,7 +1,11 @@
 import { Hono } from "hono";
 import { apiError } from "./api-error";
 import auth from "./routes/auth";
+import cities from "./routes/cities";
 import invites from "./routes/invites";
+import items from "./routes/items";
+import todos from "./routes/todos";
+import trips from "./routes/trips";
 import type { AppEnv } from "./types";
 
 const app = new Hono<AppEnv>().basePath("/api");
@@ -28,6 +32,10 @@ app.get("/health", async (c) => {
 const v1 = new Hono<AppEnv>();
 v1.route("/", auth);
 v1.route("/", invites);
+v1.route("/", trips);
+v1.route("/", cities);
+v1.route("/", items);
+v1.route("/", todos);
 app.route("/v1", v1);
 
 // Keep the { error: { code, message } } contract on the paths Hono would
