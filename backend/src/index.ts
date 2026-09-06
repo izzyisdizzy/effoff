@@ -1,9 +1,13 @@
 import { Hono } from "hono";
+import { apiError } from "./api-error";
+import auth from "./routes/auth";
+import invites from "./routes/invites";
+import type { AppEnv } from "./types";
 
-const app = new Hono<{ Bindings: Env }>().basePath("/api");
+const app = new Hono<AppEnv>().basePath("/api");
 
-// Proves the Worker runs and can round-trip to D1. Real endpoints live under
-// /api/v1 (see docs/foundation.md) and arrive with later issues.
+// Proves the Worker runs and can round-trip to D1. The only route outside
+// /api/v1 (see docs/foundation.md).
 app.get("/health", async (c) => {
   try {
     const row = await c.env.DB.prepare(
@@ -19,6 +23,19 @@ app.get("/health", async (c) => {
     console.error("health_db_check_failed", error);
     return c.json({ ok: false, db: false }, 503);
   }
+});
+
+const v1 = new Hono<AppEnv>();
+v1.route("/", auth);
+v1.route("/", invites);
+app.route("/v1", v1);
+
+// Keep the { error: { code, message } } contract on the paths Hono would
+// otherwise answer with plain text: unknown routes and uncaught throws.
+app.notFound((c) => apiError(c, 404, "not_found", "No such endpoint."));
+app.onError((error, c) => {
+  console.error("unhandled_error", error);
+  return apiError(c, 500, "internal_error", "Something went wrong.");
 });
 
 export default app;

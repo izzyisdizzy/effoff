@@ -47,6 +47,32 @@ by the migrations; the migration files are the source of truth for its value),
 and `db` reflects that real query, so the endpoint proves the Worker↔D1
 round-trip, not just that the Worker is up.
 
+## Auth
+
+Sign in with Apple only (see foundation.md, decided). `POST /api/v1/auth/sign-in`
+takes `{ identityToken, client: "web" | "ios", displayName? }`: the Worker
+verifies the Apple identity token (RS256 against Apple's JWKS), upserts the
+user by `(auth_provider, auth_subject)`, and issues an opaque 90-day session —
+an HttpOnly `effoff_session` cookie for `web`, a bearer token in the JSON body
+for `ios`. Only the SHA-256 of the token is stored (`sessions` table).
+`POST /auth/sign-out` revokes; `GET /me` returns the signed-in user. A bad
+token gets 401; a JWKS/upstream failure gets 503 (`apple_unavailable`) so
+clients don't treat an Apple outage as an invalid credential. Trip
+membership is granted via invite links: any member mints one
+(`POST /trips/:id/invites`, 30-day expiry) and a signed-in user joins with
+`POST /invites/:token/accept`. All trip-scoped routes sit behind the
+`requireSession` + `requireTripMember` middleware (`src/auth/middleware.ts`).
+
+Env vars (in `wrangler.jsonc`, overridden for tests in `vitest.config.ts`):
+
+| Var                | Value                                                                                                                          |
+| :----------------- | :----------------------------------------------------------------------------------------------------------------------------- |
+| `APPLE_JWKS_URL`   | Apple's JWKS endpoint (`https://appleid.apple.com/auth/keys` in production)                                                    |
+| `APPLE_CLIENT_IDS` | Comma-separated accepted token audiences: iOS bundle id + web Services ID (placeholders until the clients register with Apple) |
+
+Tests never contact Apple: `test/apple.ts` signs identity tokens with a
+generated RSA key and serves the matching JWKS from a stubbed `fetch`.
+
 ## Conventions
 
 - Real API endpoints live under `/api/v1` (REST JSON — see foundation.md);
