@@ -73,7 +73,11 @@ device, not in D1 — Reminders IDs are per-device/per-account anyway).
 R2 for bytes, D1 for metadata: id, trip_id, optional itinerary_item_id, R2
 key, mime type, byte size, uploaded_by, created_at. Images and PDFs. All
 access goes through the Worker (auth check → stream from R2); no public
-bucket, no signed URLs in v1.
+bucket, no signed URLs in v1. **Decided (#16):** the item link is set after
+upload via `PATCH /trips/:id/attachments/:id` (booking capture uploads before
+the item exists), attachments can be deleted, deleting an item unlinks rather
+than deletes its attachments, and the stored MIME type is sniffed from the
+bytes — see `backend/README.md` (Attachments).
 
 ### Place, PlaceTag, PlaceLink, MapList
 

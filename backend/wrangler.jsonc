@@ -22,4 +22,14 @@
       "migrations_dir": "./migrations",
     },
   ],
+  // Attachment bytes (ticket/confirmation images and PDFs); metadata lives in
+  // D1. Private bucket: every read goes through the Worker's auth check. The
+  // production bucket must exist before deploy:
+  //   npx wrangler r2 bucket create effoff-attachments
+  "r2_buckets": [
+    {
+      "binding": "ATTACHMENTS",
+      "bucket_name": "effoff-attachments",
+    },
+  ],
 }

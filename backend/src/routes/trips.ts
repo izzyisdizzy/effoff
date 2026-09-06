@@ -2,13 +2,16 @@ import { Hono } from "hono";
 import { apiError } from "../api-error";
 import { requireSession, requireTripMember } from "../auth/middleware";
 import { MAX_NAME, readJsonObject } from "../validate";
+import { deleteObjects } from "../attachments/storage";
 import {
+  publicAttachment,
   publicCity,
   publicItem,
   publicMember,
   publicTodo,
   publicTrip,
   type AppEnv,
+  type AttachmentRow,
   type ItineraryItemRow,
   type MemberWithUserRow,
   type TodoRow,
@@ -62,7 +65,7 @@ trips.get("/trips", requireSession, async (c) => {
 // that is build-order step 7.
 trips.get("/trips/:id", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("id");
-  const [tripRes, memberRes, cityRes, itemRes, todoRes] = await c.env.DB.batch([
+  const [tripRes, memberRes, cityRes, itemRes, todoRes, attachmentRes] = await c.env.DB.batch([
     c.env.DB.prepare("SELECT * FROM trips WHERE id = ?").bind(tripId),
     c.env.DB.prepare(
       "SELECT m.user_id, m.arrival_date, m.departure_date, u.email, u.display_name FROM trip_members m JOIN users u ON u.id = m.user_id WHERE m.trip_id = ? ORDER BY m.created_at",
@@ -73,6 +76,9 @@ trips.get("/trips/:id", requireSession, requireTripMember, async (c) => {
       "SELECT * FROM itinerary_items WHERE trip_id = ? ORDER BY start_utc IS NULL, start_utc, position IS NULL, position, created_at",
     ).bind(tripId),
     c.env.DB.prepare("SELECT * FROM todos WHERE trip_id = ? ORDER BY created_at").bind(tripId),
+    c.env.DB.prepare("SELECT * FROM attachments WHERE trip_id = ? ORDER BY created_at").bind(
+      tripId,
+    ),
   ]);
   const trip = tripRes?.results[0] as TripRow | undefined;
   if (trip === undefined) {
@@ -85,6 +91,7 @@ trips.get("/trips/:id", requireSession, requireTripMember, async (c) => {
     cities: ((cityRes?.results ?? []) as TripCityRow[]).map(publicCity),
     items: ((itemRes?.results ?? []) as ItineraryItemRow[]).map(publicItem),
     todos: ((todoRes?.results ?? []) as TodoRow[]).map(publicTodo),
+    attachments: ((attachmentRes?.results ?? []) as AttachmentRow[]).map(publicAttachment),
   });
 });
 
@@ -132,7 +139,24 @@ trips.delete("/trips/:id", requireSession, requireTripMember, async (c) => {
   if (trip.created_by !== c.get("user").id) {
     return apiError(c, 403, "not_trip_creator", "Only the trip creator can delete the trip.");
   }
-  // Children (members, cities, items, todos, invites) go via ON DELETE CASCADE.
+  // Attachment bytes live in R2, outside the cascade: remove them first, so a
+  // storage failure leaves the trip intact to retry (a dangling row is
+  // visible; an orphaned object is silent cost). Children (members, cities,
+  // items, todos, invites, attachment rows) then go via ON DELETE CASCADE.
+  const { results: keys } = await c.env.DB.prepare(
+    "SELECT r2_key FROM attachments WHERE trip_id = ?",
+  )
+    .bind(tripId)
+    .all<{ r2_key: string }>();
+  try {
+    await deleteObjects(
+      c.env.ATTACHMENTS,
+      keys.map((row) => row.r2_key),
+    );
+  } catch (error) {
+    console.error("attachment_r2_delete_failed", error);
+    return apiError(c, 503, "storage_unavailable", "Could not remove the trip's attachments.");
+  }
   await c.env.DB.prepare("DELETE FROM trips WHERE id = ?").bind(tripId).run();
   return c.json({ ok: true });
 });

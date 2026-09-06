@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { apiError } from "../api-error";
+import { isTripMember } from "../auth/membership";
 import { requireSession, requireTripMember } from "../auth/middleware";
 import { isLocalDateTime, isValidTimeZone } from "../time";
 import { publicTodo, type AppEnv, type TodoRow } from "../types";
@@ -54,14 +55,6 @@ function dueProblem(draft: TodoRow): string | null {
     return "dueTz must be a valid IANA zone (e.g. Asia/Tokyo).";
   }
   return null;
-}
-
-async function isTripMember(db: D1Database, tripId: string, userId: string): Promise<boolean> {
-  const row = await db
-    .prepare("SELECT 1 AS yes FROM trip_members WHERE trip_id = ? AND user_id = ?")
-    .bind(tripId, userId)
-    .first<{ yes: number }>();
-  return row !== null;
 }
 
 todos.post("/trips/:id/todos", requireSession, requireTripMember, async (c) => {

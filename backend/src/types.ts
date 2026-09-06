@@ -85,6 +85,19 @@ export type TodoRow = {
   updated_at: string;
 };
 
+export type AttachmentRow = {
+  id: string;
+  trip_id: string;
+  itinerary_item_id: string | null;
+  r2_key: string;
+  mime_type: string;
+  byte_size: number;
+  filename: string | null;
+  uploaded_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
 // Hono type environment for every route: D1 bindings plus the per-request
 // context that requireSession loads. The Variables are typed non-optional in
 // the usual Hono idiom, so reading them is only safe in handlers chained
@@ -229,6 +242,30 @@ export function publicItem(item: ItineraryItemRow): {
     position: item.position,
     createdAt: item.created_at,
     updatedAt: item.updated_at,
+  };
+}
+
+// Metadata only; the bytes are fetched from GET /api/v1/attachments/:id,
+// which clients build from the id (no url field, like every other resource).
+export function publicAttachment(attachment: AttachmentRow): {
+  id: string;
+  itineraryItemId: string | null;
+  mimeType: string;
+  byteSize: number;
+  filename: string | null;
+  uploadedBy: string;
+  createdAt: string;
+  updatedAt: string;
+} {
+  return {
+    id: attachment.id,
+    itineraryItemId: attachment.itinerary_item_id,
+    mimeType: attachment.mime_type,
+    byteSize: attachment.byte_size,
+    filename: attachment.filename,
+    uploadedBy: attachment.uploaded_by,
+    createdAt: attachment.created_at,
+    updatedAt: attachment.updated_at,
   };
 }
 
