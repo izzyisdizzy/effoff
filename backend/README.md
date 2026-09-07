@@ -17,6 +17,8 @@ wrangler.jsonc      Worker + D1 (binding: DB, db: effoff-db) + R2 (binding: ATTA
 ## Commands
 
 All run from `backend/`. Requires Node + npm; `npm install` first.
+The Node version is pinned in [`.nvmrc`](.nvmrc) — CI reads that same
+file, so `nvm use` here matches the runner.
 
 | Command              | What it does                                                                                    |
 | :------------------- | :---------------------------------------------------------------------------------------------- |
@@ -28,6 +30,16 @@ All run from `backend/`. Requires Node + npm; `npm install` first.
 | `npm run migrate`    | Apply migrations to the **local** D1 (`--remote` variant below for prod)                        |
 | `npm run deploy`     | Deploy the Worker to Cloudflare (needs `wrangler login`; see Deploying below)                   |
 | `npm run cf-typegen` | Regenerate `worker-configuration.d.ts` after `wrangler.jsonc` changes                           |
+
+## CI
+
+[`.github/workflows/backend.yml`](../.github/workflows/backend.yml) runs the
+same verification as local development — `npm ci`, then `npm run typecheck`,
+`npm run lint`, `npx oxfmt --check` (the check-only form of `npm run format`),
+and `npm test` — on every pull request and on every push to `main`. The gate in
+CI and the commands above cannot drift: they are the same commands, on the Node
+version from `.nvmrc`. The workerd test suite needs no Cloudflare credentials,
+so CI runs it with no account configured.
 
 ## Migrations
 

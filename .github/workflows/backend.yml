@@ -1,0 +1,48 @@
+name: backend
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A force-push supersedes its own in-flight run rather than racing it.
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      # node-version-file resolves from the repo root, not working-directory.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: backend/.nvmrc
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      # No --ignore-scripts: npm's allowScripts list in package.json covers
+      # esbuild and workerd, and workerd's install script must run for the
+      # Vitest pool to boot.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format
+        run: npx oxfmt --check
+
+      - name: Test
+        run: npm test
