@@ -253,13 +253,17 @@ cities.delete("/trips/:tripId/cities/:id", requireSession, requireTripMember, as
   if (existing === null) {
     return apiError(c, 404, "city_not_found", "City not found on this trip.");
   }
-  // Null the items' city_id in app code, before the delete and in the same
-  // transaction: the FK's ON DELETE SET NULL is only a backstop and would
-  // not bump updated_at, which the sync layer relies on (0002_core_schema).
+  // Every table with a nullable city_id gets nulled in app code, before the
+  // delete and in the same transaction: the FK's ON DELETE SET NULL is only a
+  // backstop and would not bump updated_at, which the sync layer relies on
+  // (0002_core_schema). Adding such a table means adding it here too.
   const now = new Date().toISOString();
   await c.env.DB.batch([
     c.env.DB.prepare(
       "UPDATE itinerary_items SET city_id = NULL, updated_at = ? WHERE trip_id = ? AND city_id = ?",
+    ).bind(now, tripId, cityId),
+    c.env.DB.prepare(
+      "UPDATE places SET city_id = NULL, updated_at = ? WHERE trip_id = ? AND city_id = ?",
     ).bind(now, tripId, cityId),
     c.env.DB.prepare("DELETE FROM trip_cities WHERE id = ? AND trip_id = ?").bind(cityId, tripId),
   ]);

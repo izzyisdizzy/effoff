@@ -5,6 +5,7 @@ import auth from "./routes/auth";
 import cities from "./routes/cities";
 import invites from "./routes/invites";
 import items from "./routes/items";
+import places from "./routes/places";
 import todos from "./routes/todos";
 import trips from "./routes/trips";
 import type { AppEnv } from "./types";
@@ -37,6 +38,7 @@ v1.route("/", trips);
 v1.route("/", cities);
 v1.route("/", items);
 v1.route("/", todos);
+v1.route("/", places);
 v1.route("/", attachments);
 app.route("/v1", v1);
 

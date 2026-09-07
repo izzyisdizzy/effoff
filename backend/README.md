@@ -97,25 +97,29 @@ route (any route under `/trips/:id`) also requires trip membership — the
 guards answer `401` (not signed in), `403` (`not_a_member`), or `404`
 (`trip_not_found`) before any handler runs. Non-2xx responses are always
 `{ "error": { "code", "message" } }`; a request body that isn't a JSON
-object, or a field that fails validation, is a `400 invalid_request`.
+object, or a field that fails validation, is a `400 invalid_request`. A write
+that a _uniqueness rule_ rejects is a `409` (only `place_exists` so far) —
+the body is fine, the trip's state is what conflicts.
 
 Successful responses wrap the resource in a named envelope — `{ trip }`,
-`{ trips }`, `{ city }`, `{ cities }`, `{ item }`, `{ todo }` (plus the trip
-doc's five keys below) — and every DELETE returns `200 { "ok": true }`.
+`{ trips }`, `{ city }`, `{ cities }`, `{ item }`, `{ todo }`, `{ place }` (plus
+the trip doc's six keys below) — and every DELETE returns `200 { "ok": true }`.
 PATCH is partial update everywhere: an absent field is unchanged, an explicit
-`null` clears a nullable field. Responses are camelCase; every row carries
+`null` clears a nullable field. The one exception is a field backed by a table
+rather than a column — a place's `tags`/`links` — where `null` is a `400` and
+`[]` is how you clear it (see Places). Responses are camelCase; every row carries
 `createdAt`/`updatedAt` (ISO 8601 UTC). Free-text fields are length-capped
 (`src/validate.ts`); names/titles max 300 chars.
 
 ### Trips
 
-| Endpoint            | Behavior                                                                                                                                                                   |
-| :------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /trips`       | `{ name }` → 201. Creates the trip and the creator's membership in one transaction                                                                                         |
-| `GET /trips`        | The caller's trips (summary shape)                                                                                                                                         |
-| `GET /trips/:id`    | The full trip doc in one response: `trip`, `members` (public user + presence window), `cities` (by position), `items`, `todos`, `attachments` (metadata)                   |
-| `PATCH /trips/:id`  | `{ name? }`                                                                                                                                                                |
-| `DELETE /trips/:id` | Creator only (`403 not_trip_creator` for other members); the trip's R2 objects are removed first (`503 storage_unavailable` leaves the trip intact), then children cascade |
+| Endpoint            | Behavior                                                                                                                                                                                             |
+| :------------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /trips`       | `{ name }` → 201. Creates the trip and the creator's membership in one transaction                                                                                                                   |
+| `GET /trips`        | The caller's trips (summary shape)                                                                                                                                                                   |
+| `GET /trips/:id`    | The full trip doc in one response: `trip`, `members` (public user + presence window), `cities` (by position), `items`, `todos`, `attachments` (metadata), `places` (tags and links nested per place) |
+| `PATCH /trips/:id`  | `{ name? }`                                                                                                                                                                                          |
+| `DELETE /trips/:id` | Creator only (`403 not_trip_creator` for other members); the trip's R2 objects are removed first (`503 storage_unavailable` leaves the trip intact), then children cascade                           |
 
 ### Cities
 
@@ -210,6 +214,41 @@ id.
 - Write order is R2 then D1 on upload (a failed insert deletes the object)
   and R2 then D1 on delete, so a failure never leaves a paid-for orphan
   object; the worst case is a row whose object is gone, which reads as 404.
+
+### Places
+
+The place layer (#17): places from a member's Google Maps lists, decorated with
+the tags, notes, and source links Maps can't hold. Maps stays the curation home
+— this is a trip-scoped annotation layer, not a place database.
+
+| Endpoint                           | Behavior                                                                        |
+| :--------------------------------- | :------------------------------------------------------------------------------ |
+| `POST /trips/:id/places`           | `{ name, cityId?, googleMapsUrl?, sourceList?, note?, tags?, links? }` → 201    |
+| `PATCH /trips/:tripId/places/:id`  | Partial update; `name` cannot be cleared                                        |
+| `DELETE /trips/:tripId/places/:id` | 404 `place_not_found` for cross-trip ids; tags and links cascade with the place |
+
+- **`tags` and `links` are declarative sets, not columns.** Omit one and the
+  stored set is untouched; send `[]` to clear it; `null` is a `400` (these are
+  tables, so it has no clear-the-column meaning). `links` are
+  `{ url, label? }` objects kept in the order you send them; a URL is a link's
+  identity within a place, so the same URL twice collapses to one (first label
+  wins). A blank or whitespace-only `label` is stored as no label (`null`).
+- **Tags are canonicalized**: trimmed, lowercased, de-duplicated, and returned
+  sorted. A client that echoes its own request array will disagree with the
+  server. Write responses read the stored sets back inside the write's own
+  transaction, so `POST`/`PATCH` and the next `GET /trips/:id` return the same
+  values in the same order by construction.
+- **`googleMapsUrl` is unique per trip** (`409 place_exists`) so re-importing a
+  Maps list can't double up. URL-less hand-added places are unconstrained, and
+  the same URL is fine on another trip. Dedupe is exact-string: two share-link
+  forms of the same pin won't collide — normalizing them belongs to whatever
+  import path ships later.
+- `cityId` must be a city on the trip (`400 unknown_city`) and is optional: a
+  place needn't belong to a city. **Deleting a city keeps its places** with
+  `cityId` nulled and `updatedAt` bumped — the decoration is the point.
+- **No import path ships here.** Places are created by plain API call; the
+  Google Maps import route (share link / share sheet / Takeout) is still an open
+  question in the root README, and the schema is the same for all three.
 
 There is deliberately no trip-lifecycle validation anywhere above: every
 mutation behaves identically before, during, and after a trip

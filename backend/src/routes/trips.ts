@@ -8,12 +8,17 @@ import {
   publicCity,
   publicItem,
   publicMember,
+  publicPlace,
   publicTodo,
   publicTrip,
   type AppEnv,
   type AttachmentRow,
   type ItineraryItemRow,
   type MemberWithUserRow,
+  type PlaceLink,
+  type PlaceLinkRow,
+  type PlaceRow,
+  type PlaceTagRow,
   type TodoRow,
   type TripCityRow,
   type TripRow,
@@ -65,7 +70,17 @@ trips.get("/trips", requireSession, async (c) => {
 // that is build-order step 7.
 trips.get("/trips/:id", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("id");
-  const [tripRes, memberRes, cityRes, itemRes, todoRes, attachmentRes] = await c.env.DB.batch([
+  const [
+    tripRes,
+    memberRes,
+    cityRes,
+    itemRes,
+    todoRes,
+    attachmentRes,
+    placeRes,
+    placeTagRes,
+    placeLinkRes,
+  ] = await c.env.DB.batch([
     c.env.DB.prepare("SELECT * FROM trips WHERE id = ?").bind(tripId),
     c.env.DB.prepare(
       "SELECT m.user_id, m.arrival_date, m.departure_date, u.email, u.display_name FROM trip_members m JOIN users u ON u.id = m.user_id WHERE m.trip_id = ? ORDER BY m.created_at",
@@ -79,11 +94,50 @@ trips.get("/trips/:id", requireSession, requireTripMember, async (c) => {
     c.env.DB.prepare("SELECT * FROM attachments WHERE trip_id = ? ORDER BY created_at").bind(
       tripId,
     ),
+    // A bulk place import can insert many rows inside one millisecond, and
+    // created_at only has that resolution — the id tiebreak keeps the order
+    // deterministic across reads.
+    c.env.DB.prepare("SELECT * FROM places WHERE trip_id = ? ORDER BY created_at, id").bind(tripId),
+    // Tags and links are fetched flat (joined through their place, which is
+    // what scopes them to the trip) and nested per place below.
+    c.env.DB.prepare(
+      "SELECT t.place_id, t.tag FROM place_tags t JOIN places p ON p.id = t.place_id WHERE p.trip_id = ? ORDER BY t.place_id, t.tag",
+    ).bind(tripId),
+    c.env.DB.prepare(
+      "SELECT l.place_id, l.url, l.label FROM place_links l JOIN places p ON p.id = l.place_id WHERE p.trip_id = ? ORDER BY l.place_id, l.position, l.url",
+    ).bind(tripId),
   ]);
   const trip = tripRes?.results[0] as TripRow | undefined;
   if (trip === undefined) {
     // The guard saw the trip, so only a concurrent delete lands here.
     return apiError(c, 404, "trip_not_found", "Trip not found.");
+  }
+  // Nest the flat tag/link rows under their place: a client should never have
+  // to join parallel arrays. Grouping by id is order-independent; what the
+  // queries' ORDER BY guarantees is the order *within* each place's set.
+  const tagsByPlace = new Map<string, string[]>();
+  for (const row of (placeTagRes?.results ?? []) as PlaceTagRow[]) {
+    const tags = tagsByPlace.get(row.place_id);
+    if (tags === undefined) {
+      tagsByPlace.set(row.place_id, [row.tag]);
+    } else {
+      tags.push(row.tag);
+    }
+  }
+  const linksByPlace = new Map<string, PlaceLink[]>();
+  // The query selects no position column (the row order carries it), so this is
+  // the projection it actually returns, not the full row type.
+  for (const row of (placeLinkRes?.results ?? []) as Pick<
+    PlaceLinkRow,
+    "place_id" | "url" | "label"
+  >[]) {
+    const link = { url: row.url, label: row.label };
+    const links = linksByPlace.get(row.place_id);
+    if (links === undefined) {
+      linksByPlace.set(row.place_id, [link]);
+    } else {
+      links.push(link);
+    }
   }
   return c.json({
     trip: publicTrip(trip),
@@ -92,6 +146,9 @@ trips.get("/trips/:id", requireSession, requireTripMember, async (c) => {
     items: ((itemRes?.results ?? []) as ItineraryItemRow[]).map(publicItem),
     todos: ((todoRes?.results ?? []) as TodoRow[]).map(publicTodo),
     attachments: ((attachmentRes?.results ?? []) as AttachmentRow[]).map(publicAttachment),
+    places: ((placeRes?.results ?? []) as PlaceRow[]).map((place) =>
+      publicPlace(place, tagsByPlace.get(place.id) ?? [], linksByPlace.get(place.id) ?? []),
+    ),
   });
 });
 

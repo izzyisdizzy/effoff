@@ -9,7 +9,7 @@ describe("GET /api/health", () => {
     expect(await res.json()).toEqual({
       ok: true,
       db: true,
-      schemaVersion: "4",
+      schemaVersion: "5",
     });
   });
 

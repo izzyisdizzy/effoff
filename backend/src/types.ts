@@ -98,6 +98,39 @@ export type AttachmentRow = {
   updated_at: string;
 };
 
+export type PlaceRow = {
+  id: string;
+  trip_id: string;
+  city_id: string | null;
+  name: string;
+  google_maps_url: string | null;
+  source_list: string | null;
+  note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+// Tags and links are value sets owned by their place: no id, no timestamps
+// (migrations/0005_places.sql explains why). position is display order.
+export type PlaceTagRow = {
+  place_id: string;
+  tag: string;
+};
+
+export type PlaceLinkRow = {
+  place_id: string;
+  url: string;
+  label: string | null;
+  position: number;
+};
+
+// A place link as the API takes and returns it — position is implied by the
+// array order, so it never appears in JSON.
+export type PlaceLink = {
+  url: string;
+  label: string | null;
+};
+
 // Hono type environment for every route: D1 bindings plus the per-request
 // context that requireSession loads. The Variables are typed non-optional in
 // the usual Hono idiom, so reading them is only safe in handlers chained
@@ -288,5 +321,39 @@ export function publicTodo(todo: TodoRow): {
     assigneeUserId: todo.assignee_user_id,
     createdAt: todo.created_at,
     updatedAt: todo.updated_at,
+  };
+}
+
+// The only serializer that is not a pure row map: a place's data spans three
+// tables, so the caller passes the tags and links it already fetched (the trip
+// doc reads them in its batch; the write paths have them in hand). Tags arrive
+// sorted, links in position order — both are the caller's job.
+export function publicPlace(
+  place: PlaceRow,
+  tags: string[],
+  links: PlaceLink[],
+): {
+  id: string;
+  cityId: string | null;
+  name: string;
+  googleMapsUrl: string | null;
+  sourceList: string | null;
+  note: string | null;
+  tags: string[];
+  links: PlaceLink[];
+  createdAt: string;
+  updatedAt: string;
+} {
+  return {
+    id: place.id,
+    cityId: place.city_id,
+    name: place.name,
+    googleMapsUrl: place.google_maps_url,
+    sourceList: place.source_list,
+    note: place.note,
+    tags,
+    links,
+    createdAt: place.created_at,
+    updatedAt: place.updated_at,
   };
 }
