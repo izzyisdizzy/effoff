@@ -113,8 +113,8 @@ trips.get("/trips/:id", requireSession, requireTripMember, async (c) => {
     return apiError(c, 404, "trip_not_found", "Trip not found.");
   }
   // Nest the flat tag/link rows under their place: a client should never have
-  // to join parallel arrays. Both queries came back ordered by place_id, so a
-  // single pass groups them and preserves each set's order.
+  // to join parallel arrays. Grouping by id is order-independent; what the
+  // queries' ORDER BY guarantees is the order *within* each place's set.
   const tagsByPlace = new Map<string, string[]>();
   for (const row of (placeTagRes?.results ?? []) as PlaceTagRow[]) {
     const tags = tagsByPlace.get(row.place_id);
@@ -125,7 +125,12 @@ trips.get("/trips/:id", requireSession, requireTripMember, async (c) => {
     }
   }
   const linksByPlace = new Map<string, PlaceLink[]>();
-  for (const row of (placeLinkRes?.results ?? []) as PlaceLinkRow[]) {
+  // The query selects no position column (the row order carries it), so this is
+  // the projection it actually returns, not the full row type.
+  for (const row of (placeLinkRes?.results ?? []) as Pick<
+    PlaceLinkRow,
+    "place_id" | "url" | "label"
+  >[]) {
     const link = { url: row.url, label: row.label };
     const links = linksByPlace.get(row.place_id);
     if (links === undefined) {

@@ -97,13 +97,17 @@ route (any route under `/trips/:id`) also requires trip membership — the
 guards answer `401` (not signed in), `403` (`not_a_member`), or `404`
 (`trip_not_found`) before any handler runs. Non-2xx responses are always
 `{ "error": { "code", "message" } }`; a request body that isn't a JSON
-object, or a field that fails validation, is a `400 invalid_request`.
+object, or a field that fails validation, is a `400 invalid_request`. A write
+that a _uniqueness rule_ rejects is a `409` (only `place_exists` so far) —
+the body is fine, the trip's state is what conflicts.
 
 Successful responses wrap the resource in a named envelope — `{ trip }`,
 `{ trips }`, `{ city }`, `{ cities }`, `{ item }`, `{ todo }`, `{ place }` (plus
 the trip doc's six keys below) — and every DELETE returns `200 { "ok": true }`.
 PATCH is partial update everywhere: an absent field is unchanged, an explicit
-`null` clears a nullable field. Responses are camelCase; every row carries
+`null` clears a nullable field. The one exception is a field backed by a table
+rather than a column — a place's `tags`/`links` — where `null` is a `400` and
+`[]` is how you clear it (see Places). Responses are camelCase; every row carries
 `createdAt`/`updatedAt` (ISO 8601 UTC). Free-text fields are length-capped
 (`src/validate.ts`); names/titles max 300 chars.
 
@@ -228,10 +232,12 @@ the tags, notes, and source links Maps can't hold. Maps stays the curation home
   tables, so it has no clear-the-column meaning). `links` are
   `{ url, label? }` objects kept in the order you send them; a URL is a link's
   identity within a place, so the same URL twice collapses to one (first label
-  wins).
+  wins). A blank or whitespace-only `label` is stored as no label (`null`).
 - **Tags are canonicalized**: trimmed, lowercased, de-duplicated, and returned
-  **sorted** — so a write response matches the next trip-doc read exactly. A
-  client that echoes its own request array will disagree with the server.
+  sorted. A client that echoes its own request array will disagree with the
+  server. Write responses read the stored sets back inside the write's own
+  transaction, so `POST`/`PATCH` and the next `GET /trips/:id` return the same
+  values in the same order by construction.
 - **`googleMapsUrl` is unique per trip** (`409 place_exists`) so re-importing a
   Maps list can't double up. URL-less hand-added places are unconstrained, and
   the same URL is fine on another trip. Dedupe is exact-string: two share-link

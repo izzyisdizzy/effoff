@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { apiError } from "../api-error";
 import { requireSession, requireTripMember } from "../auth/middleware";
+import { findTripCity, UNKNOWN_CITY_MESSAGE } from "../trip-cities";
 import { publicPlace, type AppEnv, type PlaceLink, type PlaceRow } from "../types";
 import {
   isHttpUrl,
@@ -78,7 +79,9 @@ function tagsProblem(tags: unknown): string | null {
     if (typeof tag !== "string" || tag.trim().length === 0) {
       return "each tag must be a non-empty string.";
     }
-    if (tag.trim().length > MAX_TAG) {
+    // Cap the normalized value, since that is what gets stored: lowercasing can
+    // lengthen a string (U+0130 lowercases to two code units).
+    if (normalizeTag(tag).length > MAX_TAG) {
       return `each tag must be at most ${MAX_TAG} characters.`;
     }
   }
@@ -112,12 +115,16 @@ function linksProblem(links: unknown): string | null {
   return null;
 }
 
-// Lowercased, trimmed, de-duplicated, sorted. Sorting is what makes a write
-// response byte-identical to the next trip-doc read, which orders by the
-// (place_id, tag) primary key. Validation already rejected empties and
-// over-long tags, so this only canonicalizes.
+function normalizeTag(tag: string): string {
+  return tag.trim().toLowerCase();
+}
+
+// Lowercased, trimmed, de-duplicated. Order is deliberately not set here: the
+// write paths read the stored set back inside their own batch, so SQLite's
+// ORDER BY is the single authority on tag order and a JS sort here could only
+// disagree with it (the two use different collations for non-ASCII).
 function normalizeTags(tags: string[]): string[] {
-  return [...new Set(tags.map((tag) => tag.trim().toLowerCase()))].toSorted();
+  return [...new Set(tags.map(normalizeTag))];
 }
 
 // First occurrence of a URL wins (so its label sticks); the (place_id, url)
@@ -135,17 +142,6 @@ function normalizeLinks(links: { url: string; label?: unknown }[]): PlaceLink[] 
     normalized.push({ url: link.url, label: label.length === 0 ? null : label });
   }
   return normalized;
-}
-
-async function cityExists(db: D1Database, tripId: string, cityId: string | null): Promise<boolean> {
-  if (cityId === null) {
-    return true;
-  }
-  const city = await db
-    .prepare("SELECT 1 AS yes FROM trip_cities WHERE id = ? AND trip_id = ?")
-    .bind(cityId, tripId)
-    .first<{ yes: number }>();
-  return city !== null;
 }
 
 // The partial unique index in 0005_places.sql is the only enforcement of "one
@@ -193,6 +189,33 @@ function insertLinkStatements(
   );
 }
 
+// Read the stored tag and link sets back as the last two statements of the
+// write's own batch. Doing it inside the batch (rather than before or after) is
+// what makes the response the truth: it sees exactly what this transaction
+// wrote, a concurrent writer cannot slip in between, and the ORDER BY is the
+// same one the trip doc uses — so a write response and the next GET /trips/:id
+// agree by construction instead of by two sort implementations matching.
+function readSetStatements(db: D1Database, placeId: string): D1PreparedStatement[] {
+  return [
+    db.prepare("SELECT tag FROM place_tags WHERE place_id = ? ORDER BY tag").bind(placeId),
+    db
+      .prepare("SELECT url, label FROM place_links WHERE place_id = ? ORDER BY position, url")
+      .bind(placeId),
+  ];
+}
+
+function readSets(results: D1Result[]): { tags: string[]; links: PlaceLink[] } {
+  const tagRes = results.at(-2);
+  const linkRes = results.at(-1);
+  return {
+    tags: ((tagRes?.results ?? []) as { tag: string }[]).map((row) => row.tag),
+    links: ((linkRes?.results ?? []) as { url: string; label: string | null }[]).map((row) => ({
+      url: row.url,
+      label: row.label,
+    })),
+  };
+}
+
 places.post("/trips/:id/places", requireSession, requireTripMember, async (c) => {
   const tripId = c.req.param("id");
   const body: PlaceBody | null = await readJsonObject(c);
@@ -229,14 +252,12 @@ places.post("/trips/:id/places", requireSession, requireTripMember, async (c) =>
     created_at: now,
     updated_at: now,
   };
-  if (!(await cityExists(c.env.DB, tripId, draft.city_id))) {
-    return apiError(c, 400, "unknown_city", "cityId is not a city on this trip.");
+  if (!(await findTripCity(c.env.DB, tripId, draft.city_id)).found) {
+    return apiError(c, 400, "unknown_city", UNKNOWN_CITY_MESSAGE);
   }
   if ((await conflictingPlaceId(c.env.DB, tripId, draft.google_maps_url, draft.id)) !== null) {
     return apiError(c, 409, "place_exists", PLACE_CONFLICT);
   }
-  const tags = normalizeTags(rawTags as string[]);
-  const links = normalizeLinks(rawLinks as { url: string; label?: unknown }[]);
   const statements = [
     c.env.DB.prepare(
       "INSERT INTO places (id, trip_id, city_id, name, google_maps_url, source_list, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -251,20 +272,34 @@ places.post("/trips/:id/places", requireSession, requireTripMember, async (c) =>
       draft.created_at,
       draft.updated_at,
     ),
-    ...insertTagStatements(c.env.DB, draft.id, tags),
-    ...insertLinkStatements(c.env.DB, draft.id, links),
+    ...insertTagStatements(c.env.DB, draft.id, normalizeTags(rawTags as string[])),
+    ...insertLinkStatements(
+      c.env.DB,
+      draft.id,
+      normalizeLinks(rawLinks as { url: string; label?: unknown }[]),
+    ),
+    ...readSetStatements(c.env.DB, draft.id),
   ];
+  let results: D1Result[];
   try {
-    await c.env.DB.batch(statements);
+    results = await c.env.DB.batch(statements);
   } catch (error) {
     // D1 surfaces constraint failures as opaque errors, so classify by
     // re-reading state rather than matching an error message: another writer
-    // can have taken this URL between the check above and the batch.
-    if ((await conflictingPlaceId(c.env.DB, tripId, draft.google_maps_url, draft.id)) !== null) {
-      return apiError(c, 409, "place_exists", PLACE_CONFLICT);
+    // can have taken this URL between the check above and the batch. The
+    // classification is itself a query, so a failure there (the likely case
+    // when the batch failed for an infrastructural reason) must surface the
+    // original error rather than replace it.
+    try {
+      if ((await conflictingPlaceId(c.env.DB, tripId, draft.google_maps_url, draft.id)) !== null) {
+        return apiError(c, 409, "place_exists", PLACE_CONFLICT);
+      }
+    } catch {
+      throw error;
     }
     throw error;
   }
+  const { tags, links } = readSets(results);
   return c.json({ place: publicPlace(draft, tags, links) }, 201);
 });
 
@@ -315,11 +350,8 @@ places.patch("/trips/:tripId/places/:id", requireSession, requireTripMember, asy
     note: body.note === undefined ? existing.note : (body.note as string | null),
     updated_at: new Date().toISOString(),
   };
-  if (
-    merged.city_id !== existing.city_id &&
-    !(await cityExists(c.env.DB, tripId, merged.city_id))
-  ) {
-    return apiError(c, 400, "unknown_city", "cityId is not a city on this trip.");
+  if (!(await findTripCity(c.env.DB, tripId, merged.city_id)).found) {
+    return apiError(c, 400, "unknown_city", UNKNOWN_CITY_MESSAGE);
   }
   if ((await conflictingPlaceId(c.env.DB, tripId, merged.google_maps_url, placeId)) !== null) {
     return apiError(c, 409, "place_exists", PLACE_CONFLICT);
@@ -341,55 +373,53 @@ places.patch("/trips/:tripId/places/:id", requireSession, requireTripMember, asy
       tripId,
     ),
   ];
-  let tags: string[];
-  if (body.tags === undefined) {
-    const stored = await c.env.DB.prepare(
-      "SELECT tag FROM place_tags WHERE place_id = ? ORDER BY tag",
-    )
-      .bind(placeId)
-      .all<{ tag: string }>();
-    tags = (stored.results ?? []).map((row) => row.tag);
-  } else {
-    tags = normalizeTags(body.tags as string[]);
+  // Only the sets the request actually carried are replaced; the others are
+  // left untouched and simply read back with the rest.
+  if (body.tags !== undefined) {
     statements.push(
       c.env.DB.prepare("DELETE FROM place_tags WHERE place_id = ?").bind(placeId),
-      ...insertTagStatements(c.env.DB, placeId, tags),
+      ...insertTagStatements(c.env.DB, placeId, normalizeTags(body.tags as string[])),
     );
   }
-  let links: PlaceLink[];
-  if (body.links === undefined) {
-    const stored = await c.env.DB.prepare(
-      "SELECT url, label FROM place_links WHERE place_id = ? ORDER BY position, url",
-    )
-      .bind(placeId)
-      .all<{ url: string; label: string | null }>();
-    links = (stored.results ?? []).map((row) => ({ url: row.url, label: row.label }));
-  } else {
-    links = normalizeLinks(body.links as { url: string; label?: unknown }[]);
+  if (body.links !== undefined) {
     statements.push(
       c.env.DB.prepare("DELETE FROM place_links WHERE place_id = ?").bind(placeId),
-      ...insertLinkStatements(c.env.DB, placeId, links),
+      ...insertLinkStatements(
+        c.env.DB,
+        placeId,
+        normalizeLinks(body.links as { url: string; label?: unknown }[]),
+      ),
     );
   }
+  statements.push(...readSetStatements(c.env.DB, placeId));
+  let results: D1Result[];
   try {
-    await c.env.DB.batch(statements);
+    results = await c.env.DB.batch(statements);
   } catch (error) {
-    // Same state-based classification as POST, plus the other race this batch
-    // has: a concurrent delete makes the UPDATE a no-op and the child inserts
-    // an FK violation.
-    if ((await conflictingPlaceId(c.env.DB, tripId, merged.google_maps_url, placeId)) !== null) {
-      return apiError(c, 409, "place_exists", PLACE_CONFLICT);
-    }
-    const stillThere = await c.env.DB.prepare(
-      "SELECT 1 AS yes FROM places WHERE id = ? AND trip_id = ?",
-    )
-      .bind(placeId, tripId)
-      .first<{ yes: number }>();
-    if (stillThere === null) {
-      return apiError(c, 404, "place_not_found", "Place not found on this trip.");
+    // Same state-based classification as POST, and the same rule about not
+    // letting a failing classification query hide the original error. A
+    // concurrent delete is the other race here: when this request replaces a
+    // set, its child inserts hit an FK violation and land in this catch. A
+    // request that replaces nothing has no statement to fail, so it returns 200
+    // for a row that has just gone — last-write-wins, as elsewhere in the API.
+    try {
+      if ((await conflictingPlaceId(c.env.DB, tripId, merged.google_maps_url, placeId)) !== null) {
+        return apiError(c, 409, "place_exists", PLACE_CONFLICT);
+      }
+      const stillThere = await c.env.DB.prepare(
+        "SELECT 1 AS yes FROM places WHERE id = ? AND trip_id = ?",
+      )
+        .bind(placeId, tripId)
+        .first<{ yes: number }>();
+      if (stillThere === null) {
+        return apiError(c, 404, "place_not_found", "Place not found on this trip.");
+      }
+    } catch {
+      throw error;
     }
     throw error;
   }
+  const { tags, links } = readSets(results);
   return c.json({ place: publicPlace(merged, tags, links) });
 });
 

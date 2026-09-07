@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { apiError } from "../api-error";
 import { requireSession, requireTripMember } from "../auth/middleware";
 import { isLocalDateTime, isValidTimeZone, localToUtc } from "../time";
+import { findTripCity, UNKNOWN_CITY_MESSAGE } from "../trip-cities";
 import {
   ITEM_KINDS,
   publicItem,
@@ -149,24 +150,6 @@ function finalizeItem(draft: ItineraryItemRow, cityTimezone: string | null): str
   return null;
 }
 
-async function cityTimezoneFor(
-  db: D1Database,
-  tripId: string,
-  cityId: string | null,
-): Promise<{ found: boolean; timezone: string | null }> {
-  if (cityId === null) {
-    return { found: true, timezone: null };
-  }
-  const city = await db
-    .prepare("SELECT timezone FROM trip_cities WHERE id = ? AND trip_id = ?")
-    .bind(cityId, tripId)
-    .first<{ timezone: string }>();
-  if (city === null) {
-    return { found: false, timezone: null };
-  }
-  return { found: true, timezone: city.timezone };
-}
-
 const ITEM_COLUMNS =
   "id, trip_id, city_id, kind, title, notes, address, confirmation_number, links, start_local, start_tz, end_local, end_tz, start_utc, end_utc, departure_airport, arrival_airport, position, created_at, updated_at";
 
@@ -233,9 +216,9 @@ items.post("/trips/:id/items", requireSession, requireTripMember, async (c) => {
     created_at: now,
     updated_at: now,
   };
-  const city = await cityTimezoneFor(c.env.DB, tripId, draft.city_id);
+  const city = await findTripCity(c.env.DB, tripId, draft.city_id);
   if (!city.found) {
-    return apiError(c, 400, "unknown_city", "cityId does not refer to a city on this trip.");
+    return apiError(c, 400, "unknown_city", UNKNOWN_CITY_MESSAGE);
   }
   const finalized = finalizeItem(draft, city.timezone);
   if (finalized !== null) {
@@ -304,9 +287,9 @@ items.patch("/trips/:tripId/items/:id", requireSession, requireTripMember, async
     position: body.position === undefined ? existing.position : (body.position as number | null),
     updated_at: new Date().toISOString(),
   };
-  const city = await cityTimezoneFor(c.env.DB, tripId, merged.city_id);
+  const city = await findTripCity(c.env.DB, tripId, merged.city_id);
   if (!city.found) {
-    return apiError(c, 400, "unknown_city", "cityId does not refer to a city on this trip.");
+    return apiError(c, 400, "unknown_city", UNKNOWN_CITY_MESSAGE);
   }
   // Moving an item to a different city: an end whose stored zone equals the
   // old city's zone was city-derived, so it follows the new city (unless

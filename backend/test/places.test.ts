@@ -119,38 +119,89 @@ describe("POST /api/v1/trips/:id/places", () => {
   it("400s bad input", async () => {
     const { token, tripId } = await setup("apple-sub-place-bad");
     const ok = "https://example.com/x";
-    const cases: [Record<string, unknown>, string][] = [
+    // The third element pins which validator fired: without it every row here
+    // asserts the same code, so a cap checked against the wrong constant would
+    // still pass.
+    const cases: [Record<string, unknown>, string, string?][] = [
       [{}, "invalid_request"], // no name
-      [{ name: "" }, "invalid_request"],
-      [{ name: "   " }, "invalid_request"],
-      [{ name: "x".repeat(301) }, "invalid_request"],
+      [{ name: "" }, "invalid_request", "name"],
+      [{ name: "   " }, "invalid_request", "name"],
+      [{ name: "x".repeat(301) }, "invalid_request", "name"],
       [{ name: "ok", cityId: "not-a-city" }, "unknown_city"],
-      [{ name: "ok", googleMapsUrl: "not a url" }, "invalid_request"],
-      [{ name: "ok", googleMapsUrl: "javascript:alert(1)" }, "invalid_request"],
-      [{ name: "ok", note: "x".repeat(10_001) }, "invalid_request"],
-      [{ name: "ok", sourceList: "x".repeat(301) }, "invalid_request"],
-      [{ name: "ok", tags: "ramen" }, "invalid_request"],
-      [{ name: "ok", tags: null }, "invalid_request"],
-      [{ name: "ok", tags: [7] }, "invalid_request"],
-      [{ name: "ok", tags: [""] }, "invalid_request"],
-      [{ name: "ok", tags: ["x".repeat(51)] }, "invalid_request"],
-      [{ name: "ok", tags: Array.from({ length: 26 }, (_, i) => `t${i}`) }, "invalid_request"],
-      [{ name: "ok", links: null }, "invalid_request"],
-      [{ name: "ok", links: [ok] }, "invalid_request"], // bare string, not an object
-      [{ name: "ok", links: [{}] }, "invalid_request"],
-      [{ name: "ok", links: [{ url: "nope" }] }, "invalid_request"],
-      [{ name: "ok", links: [{ url: ok, label: "x".repeat(101) }] }, "invalid_request"],
-      [{ name: "ok", links: [{ url: ok, label: 7 }] }, "invalid_request"],
+      [{ name: "ok", googleMapsUrl: "not a url" }, "invalid_request", "http(s)"],
+      [{ name: "ok", googleMapsUrl: "javascript:alert(1)" }, "invalid_request", "http(s)"],
+      [
+        { name: "ok", googleMapsUrl: `https://e.test/${"x".repeat(2000)}` },
+        "invalid_request",
+        "2000",
+      ],
+      [{ name: "ok", note: "x".repeat(10_001) }, "invalid_request", "10000"],
+      [{ name: "ok", sourceList: "x".repeat(301) }, "invalid_request", "300"],
+      [{ name: "ok", tags: "ramen" }, "invalid_request", "array"],
+      [{ name: "ok", tags: null }, "invalid_request", "array"],
+      [{ name: "ok", tags: [7] }, "invalid_request", "non-empty"],
+      [{ name: "ok", tags: [""] }, "invalid_request", "non-empty"],
+      [{ name: "ok", tags: ["x".repeat(51)] }, "invalid_request", "50 characters"],
+      [
+        { name: "ok", tags: Array.from({ length: 26 }, (_, i) => `t${i}`) },
+        "invalid_request",
+        "25 entries",
+      ],
+      [{ name: "ok", links: null }, "invalid_request", "array"],
+      [{ name: "ok", links: [ok] }, "invalid_request", "object"], // bare string
+      [{ name: "ok", links: [{}] }, "invalid_request", "http(s) url"],
+      [{ name: "ok", links: [{ url: "nope" }] }, "invalid_request", "http(s) url"],
+      [{ name: "ok", links: [{ url: ok, label: "x".repeat(101) }] }, "invalid_request", "100"],
+      [{ name: "ok", links: [{ url: ok, label: 7 }] }, "invalid_request", "label must be a string"],
+      [
+        { name: "ok", links: Array.from({ length: 51 }, (_, i) => ({ url: `${ok}/${i}` })) },
+        "invalid_request",
+        "50 entries",
+      ],
     ];
-    for (const [body, code] of cases) {
+    for (const [body, code, messagePart] of cases) {
       const res = await app.request(
         `/api/v1/trips/${tripId}/places`,
         req("POST", token, body),
         env,
       );
       expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ error: { code, message: expect.any(String) } });
+      const payload = (await res.json()) as { error: { code: string; message: string } };
+      expect(payload.error.code).toBe(code);
+      if (messagePart !== undefined) {
+        expect(payload.error.message).toContain(messagePart);
+      }
     }
+  });
+
+  it("collapses duplicate link URLs, keeping the first label", async () => {
+    const { token, tripId } = await setup("apple-sub-place-duplinks");
+    const url = "https://tabelog.com/same";
+    // The (place_id, url) primary key would reject the second row, so this
+    // collapse is what keeps a duplicate out of the batch entirely.
+    const place = await createPlace(token, tripId, {
+      name: "Spot",
+      links: [
+        { url, label: "First" },
+        { url, label: "Second" },
+        { url: "https://example.com/other", label: "Other" },
+      ],
+    });
+    expect(place.links).toEqual([
+      { url, label: "First" },
+      { url: "https://example.com/other", label: "Other" },
+    ]);
+    const [stored] = await placesFromTripDoc(token, tripId);
+    expect(stored).toEqual(place);
+  });
+
+  it("treats a blank link label as no label", async () => {
+    const { token, tripId } = await setup("apple-sub-place-blanklabel");
+    const place = await createPlace(token, tripId, {
+      name: "Spot",
+      links: [{ url: "https://example.com/a", label: "   " }],
+    });
+    expect(place.links).toEqual([{ url: "https://example.com/a", label: null }]);
   });
 
   it("400s a body that is valid JSON but not an object", async () => {
@@ -266,6 +317,7 @@ describe("PATCH /api/v1/trips/:tripId/places/:id", () => {
       req("PATCH", token, { cityId: otherCityId }),
       env,
     );
+    expect(moved.status).toBe(200);
     expect(((await moved.json()) as { place: Place }).place.cityId).toBe(otherCityId);
 
     const cleared = await app.request(
@@ -273,6 +325,7 @@ describe("PATCH /api/v1/trips/:tripId/places/:id", () => {
       req("PATCH", token, { cityId: null }),
       env,
     );
+    expect(cleared.status).toBe(200);
     expect(((await cleared.json()) as { place: Place }).place.cityId).toBeNull();
 
     const bad = await app.request(
@@ -310,6 +363,43 @@ describe("PATCH /api/v1/trips/:tripId/places/:id", () => {
     );
     expect(same.status).toBe(200);
     expect(((await same.json()) as { place: Place }).place.note).toBe("still fine");
+  });
+
+  it("400s bad tags and links, and clears nullable text", async () => {
+    const { token, tripId } = await setup("apple-sub-place-patchvalidate");
+    const place = await createPlace(token, tripId, {
+      name: "Spot",
+      note: "a note",
+      sourceList: "a list",
+    });
+    // PATCH runs the same set validators as POST — this is the only coverage of
+    // that branch.
+    const bad: Record<string, unknown>[] = [
+      { tags: null },
+      { tags: "ramen" },
+      { tags: [""] },
+      { links: null },
+      { links: [{ url: "nope" }] },
+    ];
+    for (const body of bad) {
+      const res = await app.request(
+        `/api/v1/trips/${tripId}/places/${place.id}`,
+        req("PATCH", token, body),
+        env,
+      );
+      expect(res.status).toBe(400);
+    }
+
+    const cleared = await app.request(
+      `/api/v1/trips/${tripId}/places/${place.id}`,
+      req("PATCH", token, { note: null, sourceList: null }),
+      env,
+    );
+    expect(cleared.status).toBe(200);
+    expect(((await cleared.json()) as { place: Place }).place).toMatchObject({
+      note: null,
+      sourceList: null,
+    });
   });
 
   it("400s clearing the name", async () => {
